@@ -188,6 +188,16 @@ export default function MinecraftGame() {
     canvas.addEventListener('click', () => { if (!gameRef.current?.locked) canvas.requestPointerLock(); });
     canvas.addEventListener('contextmenu', e => e.preventDefault());
 
+    // Prevent pinch-to-zoom on macOS trackpad
+    const preventZoom = (e: Event) => { e.preventDefault(); };
+    const preventWheelZoom = (e: WheelEvent) => {
+      if (e.ctrlKey) { e.preventDefault(); }
+    };
+    document.addEventListener('gesturestart', preventZoom, { passive: false });
+    document.addEventListener('gesturechange', preventZoom, { passive: false });
+    document.addEventListener('gestureend', preventZoom, { passive: false });
+    document.addEventListener('wheel', preventWheelZoom, { passive: false });
+
     const onResize = () => {
       const g = gameRef.current;
       if (!g) return;
@@ -251,6 +261,10 @@ export default function MinecraftGame() {
       document.removeEventListener('mousedown', onMouseDown);
       document.removeEventListener('wheel', onWheel);
       document.removeEventListener('pointerlockchange', onPointerLockChange);
+      document.removeEventListener('gesturestart', preventZoom);
+      document.removeEventListener('gesturechange', preventZoom);
+      document.removeEventListener('gestureend', preventZoom);
+      document.removeEventListener('wheel', preventWheelZoom);
       window.removeEventListener('resize', onResize);
       if (gameRef.current) {
         cancelAnimationFrame(gameRef.current.animFrame);
@@ -271,7 +285,7 @@ export default function MinecraftGame() {
       style={{ fontFamily: "'Press Start 2P', monospace" }}
     >
       {/* Game Canvas */}
-      <canvas ref={canvasRef} className="w-full h-full block" />
+      <canvas ref={canvasRef} className="w-full h-full block" style={{ touchAction: 'none' }} />
 
       {/* Crosshair */}
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
