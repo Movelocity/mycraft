@@ -33,6 +33,14 @@ function isOpaque(type: BlockType): boolean {
 let atlasTexture: THREE.CanvasTexture | null = null;
 let atlasMap: Map<string, [number, number, number, number]> = new Map(); // key -> [u0, v0, u1, v1]
 
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    atlasTexture?.dispose();
+    atlasTexture = null;
+    atlasMap.clear();
+  });
+}
+
 const ATLAS_COLS = 8;
 const TILE_SIZE = 16;
 
@@ -73,6 +81,7 @@ function buildAtlas(): { texture: THREE.CanvasTexture; map: Map<string, [number,
   });
 
   const tex = new THREE.CanvasTexture(atlasCanvas);
+  tex.flipY = false;
   tex.magFilter = THREE.NearestFilter;
   tex.minFilter = THREE.NearestFilter;
   tex.generateMipmaps = false;

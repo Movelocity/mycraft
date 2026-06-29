@@ -23,7 +23,7 @@ export type BlockType =
 
 export interface BlockDef {
   name: string;
-  color: {
+  color: {  // 图标颜色
     side: number;      // hex int, e.g. 0x8B5E3C
     top?: number;      // override for top face
     bottom?: number;   // override for bottom face
