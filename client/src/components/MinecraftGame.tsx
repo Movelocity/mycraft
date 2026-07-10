@@ -21,7 +21,26 @@ import {
   InputState,
 } from '@/lib/minecraft/player';
 
-export default function MinecraftGame() {
+export interface GameInitData {
+  seed: number;
+  radius: number;
+  changes?: [number, number, number, BlockType][];
+  player?: {
+    position: { x: number; y: number; z: number };
+    yaw: number;
+    pitch: number;
+    flying: boolean;
+  };
+  hotbarIndex?: number;
+}
+
+interface MinecraftGameProps {
+  loadData?: GameInitData;
+  slot?: number;
+  onExit?: () => void;
+}
+
+export default function MinecraftGame({ loadData, slot, onExit }: MinecraftGameProps = {}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const gameRef = useRef<{
     scene: THREE.Scene;
@@ -37,14 +56,18 @@ export default function MinecraftGame() {
     hotbarIndex: number;
     locked: boolean;
     needsRebuild: boolean;
+    seed: number;
+    radius: number;
+    changes: [number, number, number, BlockType][];
   } | null>(null);
 
-  const [started, setStarted] = useState(false);
-  const [hotbarIndex, setHotbarIndex] = useState(0);
+  const [hotbarIndex, setHotbarIndex] = useState(loadData?.hotbarIndex ?? 0);
   const [debugInfo, setDebugInfo] = useState({ x: 0, y: 0, z: 0, fps: 0, flying: false, targetBlock: 'air' });
   const [showHelp, setShowHelp] = useState(false);
   const [isLocked, setIsLocked] = useState(false);
   const [hearts] = useState(10);
+  const [saveNotification, setSaveNotification] = useState<string | null>(null);
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const rebuildWorld = useCallback(() => {
     const g = gameRef.current;
@@ -58,6 +81,43 @@ export default function MinecraftGame() {
     g.needsRebuild = false;
   }, []);
 
+  const handleSave = useCallback(async () => {
+    const g = gameRef.current;
+    if (!slot || !g) return;
+    const { extractSaveData, saveGame } = await import('@/lib/minecraft/save');
+    const data = extractSaveData({
+      slot,
+      seed: g.seed,
+      radius: g.radius,
+      changes: g.changes,
+      player: g.playerState,
+      hotbarIndex: g.hotbarIndex,
+    });
+    await saveGame(slot, data);
+    setSaveNotification('游戏已保存');
+    setTimeout(() => setSaveNotification(null), 2000);
+  }, [slot]);
+
+  const scheduleAutoSave = useCallback(() => {
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = setTimeout(async () => {
+      const g = gameRef.current;
+      if (!slot || !g) return;
+      const { extractSaveData, saveGame } = await import('@/lib/minecraft/save');
+      const data = extractSaveData({
+        slot,
+        seed: g.seed,
+        radius: g.radius,
+        changes: g.changes,
+        player: g.playerState,
+        hotbarIndex: g.hotbarIndex,
+      });
+      await saveGame(slot, data);
+      setSaveNotification('自动保存中...');
+      setTimeout(() => setSaveNotification(null), 2000);
+    }, 30000);
+  }, [slot]);
+
   const initGame = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -67,8 +127,15 @@ export default function MinecraftGame() {
     scene.add(createSkybox());
     createSun(scene);
 
-    const worldSeed = Math.floor(Math.random() * 99999);
-    const world = generateWorld(worldSeed, 30);
+    const worldSeed = loadData?.seed ?? Math.floor(Math.random() * 99999);
+    const worldRadius = loadData?.radius ?? 30;
+    const world = generateWorld(worldSeed, worldRadius);
+
+    // Apply saved block changes
+    const changes: [number, number, number, BlockType][] = loadData?.changes ? [...loadData.changes] : [];
+    for (const [cx, cy, cz, type] of changes) {
+      setBlock(world, cx, cy, cz, type);
+    }
 
     const worldGroup = buildWorldMesh(world);
     worldGroup.name = 'worldGroup';
@@ -77,16 +144,27 @@ export default function MinecraftGame() {
     const highlight = createHighlightBox();
     scene.add(highlight);
 
-    // Find spawn Y
-    let spawnY = 40;
-    for (let y = 60; y >= 0; y--) {
-      if (getBlock(world, 0, y, 0) !== 'air') {
-        spawnY = y + 2;
-        break;
+    let playerState;
+    if (loadData?.player) {
+      playerState = createPlayerState(
+        loadData.player.position.x,
+        loadData.player.position.y,
+        loadData.player.position.z,
+      );
+      playerState.yaw = loadData.player.yaw;
+      playerState.pitch = loadData.player.pitch;
+      playerState.flying = loadData.player.flying;
+    } else {
+      let spawnY = 40;
+      for (let y = 60; y >= 0; y--) {
+        if (getBlock(world, 0, y, 0) !== 'air') {
+          spawnY = y + 2;
+          break;
+        }
       }
+      playerState = createPlayerState(0.5, spawnY + 1.8, 0.5);
     }
 
-    const playerState = createPlayerState(0.5, spawnY + 1.8, 0.5);
     const input: InputState = {
       forward: false, backward: false,
       left: false, right: false,
@@ -96,7 +174,9 @@ export default function MinecraftGame() {
     gameRef.current = {
       scene, camera, renderer, world, worldGroup, highlight,
       animFrame: 0, lastTime: performance.now(),
-      input, playerState, hotbarIndex: 0, locked: false, needsRebuild: false,
+      input, playerState, hotbarIndex: loadData?.hotbarIndex ?? 0,
+      locked: false, needsRebuild: false,
+      seed: worldSeed, radius: worldRadius, changes,
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
@@ -122,6 +202,10 @@ export default function MinecraftGame() {
         case 'Digit8': g.hotbarIndex = 7; setHotbarIndex(7); break;
         case 'Digit9': g.hotbarIndex = 8; setHotbarIndex(8); break;
         case 'KeyH': setShowHelp(h => !h); break;
+        case 'F5':
+          e.preventDefault();
+          handleSave();
+          break;
       }
     };
 
@@ -153,14 +237,20 @@ export default function MinecraftGame() {
       const target = getTargetBlock(g.camera, g.world);
       if (!target?.hit) return;
       if (e.button === 0) {
-        setBlock(g.world, target.blockPos.x, target.blockPos.y, target.blockPos.z, 'air');
+        const bx = target.blockPos.x, by = target.blockPos.y, bz = target.blockPos.z;
+        setBlock(g.world, bx, by, bz, 'air');
+        g.changes.push([bx, by, bz, 'air']);
         g.needsRebuild = true;
+        scheduleAutoSave();
       } else if (e.button === 2) {
         const px = target.blockPos.x + target.faceNormal.x;
         const py = target.blockPos.y + target.faceNormal.y;
         const pz = target.blockPos.z + target.faceNormal.z;
-        setBlock(g.world, px, py, pz, HOTBAR_BLOCKS[g.hotbarIndex]);
+        const blockType = HOTBAR_BLOCKS[g.hotbarIndex];
+        setBlock(g.world, px, py, pz, blockType);
+        g.changes.push([px, py, pz, blockType]);
         g.needsRebuild = true;
+        scheduleAutoSave();
       }
     };
 
@@ -266,18 +356,17 @@ export default function MinecraftGame() {
       document.removeEventListener('gestureend', preventZoom);
       document.removeEventListener('wheel', preventWheelZoom);
       window.removeEventListener('resize', onResize);
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
       if (gameRef.current) {
         cancelAnimationFrame(gameRef.current.animFrame);
         gameRef.current.renderer.dispose();
       }
     };
-  }, [rebuildWorld]);
+  }, [rebuildWorld, loadData, handleSave, scheduleAutoSave]);
 
   useEffect(() => {
-    if (started) return initGame();
-  }, [started, initGame]);
-
-  if (!started) return <StartScreen onStart={() => setStarted(true)} />;
+    return initGame();
+  }, [initGame]);
 
   return (
     <div
@@ -327,27 +416,87 @@ export default function MinecraftGame() {
       {/* Hotbar */}
       <HotbarHUD hotbarIndex={hotbarIndex} />
 
-      {/* Click to play overlay */}
+      {/* Pause menu overlay */}
       {!isLocked && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+        <div className="absolute inset-0 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.5)' }}>
           <div style={{
-            background: 'rgba(0,0,0,0.72)',
+            background: '#1c1c1c',
             border: '3px solid #666',
-            padding: '20px 32px',
+            borderRight: '3px solid #333',
+            borderBottom: '3px solid #333',
+            padding: '28px 36px',
             color: '#fff',
-            fontSize: '11px',
+            fontFamily: "'Press Start 2P', monospace",
+            fontSize: '10px',
             textAlign: 'center',
-            lineHeight: '2.2',
+            minWidth: '280px',
           }}>
-            <div style={{ fontSize: '14px', color: '#FCFC00', marginBottom: '8px' }}>PAUSED</div>
-            <div>Click to play</div>
-            <div style={{ fontSize: '8px', color: '#aaa' }}>ESC to release mouse</div>
+            <div style={{ fontSize: '14px', color: '#FCFC00', marginBottom: '20px' }}>PAUSED</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <button
+                onClick={() => canvasRef.current?.requestPointerLock()}
+                style={{
+                  background: '#5D8A3C',
+                  border: '3px solid #000',
+                  borderRight: '3px solid #2A2A2A',
+                  borderBottom: '3px solid #2A2A2A',
+                  color: '#fff',
+                  fontFamily: "'Press Start 2P', monospace",
+                  fontSize: '10px',
+                  padding: '12px 24px',
+                  cursor: 'pointer',
+                  textShadow: '2px 2px 0 #000',
+                }}
+              >
+                继续游戏
+              </button>
+              <button
+                onClick={async () => {
+                  await handleSave();
+                  onExit?.();
+                }}
+                style={{
+                  background: '#555',
+                  border: '3px solid #000',
+                  borderRight: '3px solid #2A2A2A',
+                  borderBottom: '3px solid #2A2A2A',
+                  color: '#fff',
+                  fontFamily: "'Press Start 2P', monospace",
+                  fontSize: '10px',
+                  padding: '12px 24px',
+                  cursor: 'pointer',
+                  textShadow: '2px 2px 0 #000',
+                }}
+              >
+                保存并退出
+              </button>
+            </div>
           </div>
         </div>
       )}
 
       {/* Help overlay */}
       {showHelp && <HelpOverlay onClose={() => setShowHelp(false)} />}
+
+      {/* Save notification */}
+      {saveNotification && (
+        <div
+          className="absolute bottom-20 left-1/2 pointer-events-none"
+          style={{
+            transform: 'translateX(-50%)',
+            background: 'rgba(0,0,0,0.7)',
+            border: '2px solid #888',
+            padding: '8px 20px',
+            color: '#FCFC00',
+            fontSize: '9px',
+            fontFamily: "'Press Start 2P', monospace",
+            textShadow: '1px 1px 0 #000',
+            animation: 'fadeInOut 2s ease-in-out',
+          }}
+        >
+          {saveNotification}
+        </div>
+      )}
     </div>
   );
 }
@@ -491,143 +640,4 @@ function HelpOverlay({ onClose }: { onClose: () => void }) {
   );
 }
 
-// ── Start Screen ──────────────────────────────────────────────────────────────
 
-function StartScreen({ onStart }: { onStart: () => void }) {
-  return (
-    <div
-      className="w-full h-screen flex flex-col items-center justify-center relative overflow-hidden"
-      style={{
-        background: 'linear-gradient(180deg, #87CEEB 0%, #87CEEB 55%, #5D8A3C 55%, #5D8A3C 62%, #8B5E3C 62%, #8B5E3C 100%)',
-        fontFamily: "'Press Start 2P', monospace",
-        userSelect: 'none',
-      }}
-    >
-      {/* Clouds */}
-      <div style={{ position: 'absolute', top: '8%', left: '5%', opacity: 0.85 }}>
-        <CloudShape />
-      </div>
-      <div style={{ position: 'absolute', top: '15%', right: '10%', opacity: 0.7, transform: 'scale(0.7)' }}>
-        <CloudShape />
-      </div>
-
-      {/* Title */}
-      <div style={{ textAlign: 'center', marginBottom: '52px', position: 'relative' }}>
-        {/* Shadow layer */}
-        <div style={{
-          position: 'absolute',
-          top: '5px', left: '5px',
-          fontSize: 'clamp(26px, 5.5vw, 52px)',
-          color: '#3A3A00',
-          letterSpacing: '2px',
-          whiteSpace: 'nowrap',
-        }}>MINECRAFT</div>
-        <div style={{
-          fontSize: 'clamp(26px, 5.5vw, 52px)',
-          color: '#FCFC00',
-          letterSpacing: '2px',
-          whiteSpace: 'nowrap',
-          position: 'relative',
-        }}>MINECRAFT</div>
-        <div style={{
-          fontSize: 'clamp(9px, 1.8vw, 14px)',
-          color: '#fff',
-          textShadow: '2px 2px 0 #000',
-          letterSpacing: '6px',
-          marginTop: '6px',
-        }}>WEB DEMO</div>
-      </div>
-
-      {/* Buttons */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', alignItems: 'center' }}>
-        <MCButton onClick={onStart} primary>
-          ▶ SINGLEPLAYER
-        </MCButton>
-        <MCButton onClick={() => alert('Multiplayer coming soon!')} primary={false}>
-          MULTIPLAYER
-        </MCButton>
-      </div>
-
-      {/* Tips */}
-      <div style={{
-        marginTop: '32px',
-        color: '#fff',
-        fontSize: '8px',
-        textShadow: '1px 1px 0 #000',
-        textAlign: 'center',
-        lineHeight: '2.2',
-      }}>
-        <div>Left Click = Break  ·  Right Click = Place</div>
-        <div>WASD = Move  ·  Space = Jump  ·  F = Fly</div>
-      </div>
-
-      {/* Version */}
-      <div style={{
-        position: 'absolute', bottom: '16px', right: '16px',
-        color: 'rgba(255,255,255,0.5)', fontSize: '7px',
-        textShadow: '1px 1px 0 #000',
-      }}>
-        Web Demo v1.0 · Three.js
-      </div>
-
-      {/* Dirt texture bottom strip label */}
-      <div style={{
-        position: 'absolute', bottom: '16px', left: '16px',
-        color: 'rgba(255,255,255,0.5)', fontSize: '7px',
-        textShadow: '1px 1px 0 #000',
-      }}>
-        Seed: random
-      </div>
-    </div>
-  );
-}
-
-function MCButton({ children, onClick, primary }: {
-  children: React.ReactNode;
-  onClick: () => void;
-  primary: boolean;
-}) {
-  const [hovered, setHovered] = useState(false);
-  const [pressed, setPressed] = useState(false);
-
-  return (
-    <button
-      onClick={onClick}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => { setHovered(false); setPressed(false); }}
-      onMouseDown={() => setPressed(true)}
-      onMouseUp={() => setPressed(false)}
-      style={{
-        background: primary
-          ? (hovered ? '#6AAA44' : '#5D8A3C')
-          : (hovered ? '#777' : '#555'),
-        border: '3px solid #000',
-        borderRight: '3px solid #2A2A2A',
-        borderBottom: '3px solid #2A2A2A',
-        color: '#fff',
-        fontFamily: "'Press Start 2P', monospace",
-        fontSize: '11px',
-        padding: '14px 48px',
-        cursor: 'pointer',
-        textShadow: '2px 2px 0 #000',
-        letterSpacing: '1px',
-        transform: pressed ? 'scale(0.97)' : 'scale(1)',
-        transition: 'transform 0.1s, background 0.1s',
-        minWidth: '260px',
-        textAlign: 'center',
-      }}
-    >
-      {children}
-    </button>
-  );
-}
-
-function CloudShape() {
-  return (
-    <svg width="120" height="50" viewBox="0 0 120 50" style={{ imageRendering: 'pixelated' }}>
-      <rect x="20" y="30" width="80" height="20" fill="white" />
-      <rect x="30" y="20" width="60" height="20" fill="white" />
-      <rect x="40" y="10" width="40" height="20" fill="white" />
-    </svg>
-  );
-}
