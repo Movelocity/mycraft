@@ -135,9 +135,11 @@ client/src/
 │   └── mobile/
 │       ├── MobileControls.tsx  # 移动端控制容器
 │       ├── FloatingJoystick.tsx # 浮动摇杆
-│       ├── JumpButton.tsx      # 跳跃/飞行按钮
-│       └── MobileHotbar.tsx    # 移动端快捷栏
+│       └── JumpButton.tsx      # 跳跃/飞行按钮
 ```
+
+> **注意**：存档界面（Home.tsx 中的存档槽位选择）移动端和桌面端共用一套 UI，
+> 通过响应式样式适配不同屏幕，不单独拆分移动端存档组件。
 
 ---
 
@@ -186,7 +188,8 @@ client/src/
 ### 阶段六：集成与优化
 - [ ] **8.10** MinecraftGame 集成
   - [ ] 8.10.1 移动端模式下加载 MobileControls
-  - [ ] 8.10.2 隐藏 PC 端元素
+  - [ ] 8.10.2 隐藏 PC 端元素（指针锁定提示等）
+  - [ ] 8.10.3 存档 UI 统一：Home.tsx 存档界面共用一套，响应式适配移动端
 - [ ] **8.11** 体验优化
   - [ ] 8.11.1 按钮视觉反馈
   - [ ] 8.11.2 防误触处理

@@ -434,14 +434,15 @@ export default function MinecraftGame({ loadData, slot, onExit }: MinecraftGameP
             border: '3px solid #666',
             borderRight: '3px solid #333',
             borderBottom: '3px solid #333',
-            padding: '28px 36px',
+            padding: 'clamp(16px, 4vw, 28px) clamp(20px, 5vw, 36px)',
             color: '#fff',
             fontFamily: "'Press Start 2P', monospace",
-            fontSize: '10px',
+            fontSize: 'clamp(8px, 2vw, 10px)',
             textAlign: 'center',
-            minWidth: '280px',
+            width: '80%',
+            maxWidth: '320px',
           }}>
-            <div style={{ fontSize: '14px', color: '#FCFC00', marginBottom: '20px' }}>PAUSED</div>
+            <div style={{ fontSize: 'clamp(11px, 2.8vw, 14px)', color: '#FCFC00', marginBottom: '20px' }}>PAUSED</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               <button
                 onClick={() => canvasRef.current?.requestPointerLock()}
@@ -452,7 +453,7 @@ export default function MinecraftGame({ loadData, slot, onExit }: MinecraftGameP
                   borderBottom: '3px solid #2A2A2A',
                   color: '#fff',
                   fontFamily: "'Press Start 2P', monospace",
-                  fontSize: '10px',
+                  fontSize: 'clamp(8px, 2vw, 10px)',
                   padding: '12px 24px',
                   cursor: 'pointer',
                   textShadow: '2px 2px 0 #000',
@@ -472,7 +473,7 @@ export default function MinecraftGame({ loadData, slot, onExit }: MinecraftGameP
                   borderBottom: '3px solid #2A2A2A',
                   color: '#fff',
                   fontFamily: "'Press Start 2P', monospace",
-                  fontSize: '10px',
+                  fontSize: 'clamp(8px, 2vw, 10px)',
                   padding: '12px 24px',
                   cursor: 'pointer',
                   textShadow: '2px 2px 0 #000',

@@ -67,7 +67,7 @@ export default function Home() {
       </div>
 
       {/* Save Slots */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', alignItems: 'center', marginBottom: '24px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', alignItems: 'center', marginBottom: '24px', width: '90%', maxWidth: '360px' }}>
         {saves.map((save) => (
           <button
             key={save.slot}
@@ -79,22 +79,22 @@ export default function Home() {
               borderBottom: '3px solid #2A2A2A',
               color: '#fff',
               fontFamily: "'Press Start 2P', monospace",
-              fontSize: '10px',
-              padding: '12px 36px',
+              fontSize: 'clamp(8px, 2vw, 10px)',
+              padding: '12px 24px',
               cursor: 'pointer',
               textShadow: '2px 2px 0 #000',
-              minWidth: '300px',
+              width: '100%',
               textAlign: 'center',
               lineHeight: '2',
             }}
           >
             <div>{save.name || `存档 ${save.slot}`}</div>
             {save.timestamp > 0 ? (
-              <div style={{ fontSize: '7px', color: '#ccc' }}>
+              <div style={{ fontSize: 'clamp(6px, 1.5vw, 7px)', color: '#ccc' }}>
                 {new Date(save.timestamp).toLocaleDateString()} {new Date(save.timestamp).toLocaleTimeString()}
               </div>
             ) : (
-              <div style={{ fontSize: '7px', color: '#888' }}>空存档</div>
+              <div style={{ fontSize: 'clamp(6px, 1.5vw, 7px)', color: '#888' }}>空存档</div>
             )}
           </button>
         ))}
@@ -102,8 +102,8 @@ export default function Home() {
 
       {/* Tips */}
       <div style={{
-        color: '#fff', fontSize: '8px', textShadow: '1px 1px 0 #000',
-        textAlign: 'center', lineHeight: '2.2',
+        color: '#fff', fontSize: 'clamp(6px, 1.6vw, 8px)', textShadow: '1px 1px 0 #000',
+        textAlign: 'center', lineHeight: '2.2', padding: '0 16px',
       }}>
         <div>Left Click = Break  ·  Right Click = Place</div>
         <div>WASD = Move  ·  Space = Jump  ·  F = Fly</div>
