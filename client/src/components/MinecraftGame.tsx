@@ -5,9 +5,9 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { BLOCKS, HOTBAR_BLOCKS, type BlockType } from '@/lib/minecraft/blocks';
-import { generateWorld, WorldData, setBlock, getBlock } from '@/lib/minecraft/world';
+import { ChunkManager, RENDER_DISTANCE } from '@/lib/minecraft/chunk';
 import {
-  buildWorldMesh,
+  buildChunkMesh,
   createSkybox,
   createSun,
   createHighlightBox,
@@ -46,8 +46,7 @@ export default function MinecraftGame({ loadData, slot, onExit }: MinecraftGameP
     scene: THREE.Scene;
     camera: THREE.PerspectiveCamera;
     renderer: THREE.WebGLRenderer;
-    world: WorldData;
-    worldGroup: THREE.Group;
+    chunkManager: ChunkManager;
     highlight: THREE.LineSegments;
     animFrame: number;
     lastTime: number;
@@ -55,30 +54,39 @@ export default function MinecraftGame({ loadData, slot, onExit }: MinecraftGameP
     playerState: ReturnType<typeof createPlayerState>;
     hotbarIndex: number;
     locked: boolean;
-    needsRebuild: boolean;
     seed: number;
     radius: number;
     changes: [number, number, number, BlockType][];
   } | null>(null);
 
   const [hotbarIndex, setHotbarIndex] = useState(loadData?.hotbarIndex ?? 0);
-  const [debugInfo, setDebugInfo] = useState({ x: 0, y: 0, z: 0, fps: 0, flying: false, targetBlock: 'air' });
+  const [debugInfo, setDebugInfo] = useState({ x: 0, y: 0, z: 0, fps: 0, flying: false, targetBlock: 'air', chunks: 0 });
   const [showHelp, setShowHelp] = useState(false);
   const [isLocked, setIsLocked] = useState(false);
   const [hearts] = useState(10);
   const [saveNotification, setSaveNotification] = useState<string | null>(null);
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const rebuildWorld = useCallback(() => {
+  const rebuildDirtyChunks = useCallback(() => {
     const g = gameRef.current;
     if (!g) return;
-    const old = g.scene.getObjectByName('worldGroup');
-    if (old) g.scene.remove(old);
-    const newGroup = buildWorldMesh(g.world);
-    newGroup.name = 'worldGroup';
-    g.scene.add(newGroup);
-    g.worldGroup = newGroup;
-    g.needsRebuild = false;
+    const dirtyChunks = g.chunkManager.getDirtyChunks();
+    for (const chunk of dirtyChunks) {
+      const chunkName = `chunk_${chunk.x}_${chunk.z}`;
+      const old = g.scene.getObjectByName(chunkName);
+      if (old) {
+        old.traverse((obj) => {
+          if (obj instanceof THREE.Mesh) {
+            obj.geometry.dispose();
+            (obj.material as THREE.Material).dispose();
+          }
+        });
+        g.scene.remove(old);
+      }
+      const newMesh = buildChunkMesh(chunk, g.chunkManager);
+      g.scene.add(newMesh);
+      chunk.dirty = false;
+    }
   }, []);
 
   const handleSave = useCallback(async () => {
@@ -129,17 +137,13 @@ export default function MinecraftGame({ loadData, slot, onExit }: MinecraftGameP
 
     const worldSeed = loadData?.seed ?? Math.floor(Math.random() * 99999);
     const worldRadius = loadData?.radius ?? 30;
-    const world = generateWorld(worldSeed, worldRadius);
+    const chunkManager = new ChunkManager(worldSeed);
 
     // Apply saved block changes
     const changes: [number, number, number, BlockType][] = loadData?.changes ? [...loadData.changes] : [];
     for (const [cx, cy, cz, type] of changes) {
-      setBlock(world, cx, cy, cz, type);
+      chunkManager.setBlock(cx, cy, cz, type);
     }
-
-    const worldGroup = buildWorldMesh(world);
-    worldGroup.name = 'worldGroup';
-    scene.add(worldGroup);
 
     const highlight = createHighlightBox();
     scene.add(highlight);
@@ -155,9 +159,11 @@ export default function MinecraftGame({ loadData, slot, onExit }: MinecraftGameP
       playerState.pitch = loadData.player.pitch;
       playerState.flying = loadData.player.flying;
     } else {
+      // 生成出生点区块以找到地面高度
+      chunkManager.getOrGenerateChunk(0, 0);
       let spawnY = 40;
       for (let y = 60; y >= 0; y--) {
-        if (getBlock(world, 0, y, 0) !== 'air') {
+        if (chunkManager.getBlock(0, y, 0) !== 'air') {
           spawnY = y + 2;
           break;
         }
@@ -172,10 +178,10 @@ export default function MinecraftGame({ loadData, slot, onExit }: MinecraftGameP
     };
 
     gameRef.current = {
-      scene, camera, renderer, world, worldGroup, highlight,
+      scene, camera, renderer, chunkManager, highlight,
       animFrame: 0, lastTime: performance.now(),
       input, playerState, hotbarIndex: loadData?.hotbarIndex ?? 0,
-      locked: false, needsRebuild: false,
+      locked: false,
       seed: worldSeed, radius: worldRadius, changes,
     };
 
@@ -234,22 +240,20 @@ export default function MinecraftGame({ loadData, slot, onExit }: MinecraftGameP
     const onMouseDown = (e: MouseEvent) => {
       const g = gameRef.current;
       if (!g || !g.locked) return;
-      const target = getTargetBlock(g.camera, g.world);
+      const target = getTargetBlock(g.camera, g.chunkManager);
       if (!target?.hit) return;
       if (e.button === 0) {
         const bx = target.blockPos.x, by = target.blockPos.y, bz = target.blockPos.z;
-        setBlock(g.world, bx, by, bz, 'air');
+        g.chunkManager.setBlock(bx, by, bz, 'air');
         g.changes.push([bx, by, bz, 'air']);
-        g.needsRebuild = true;
         scheduleAutoSave();
       } else if (e.button === 2) {
         const px = target.blockPos.x + target.faceNormal.x;
         const py = target.blockPos.y + target.faceNormal.y;
         const pz = target.blockPos.z + target.faceNormal.z;
         const blockType = HOTBAR_BLOCKS[g.hotbarIndex];
-        setBlock(g.world, px, py, pz, blockType);
+        g.chunkManager.setBlock(px, py, pz, blockType);
         g.changes.push([px, py, pz, blockType]);
-        g.needsRebuild = true;
         scheduleAutoSave();
       }
     };
@@ -312,12 +316,17 @@ export default function MinecraftGame({ loadData, slot, onExit }: MinecraftGameP
         fpsCount = 0; fpsTimer = 0;
       }
 
-      updatePlayer(g.playerState, g.input, g.world, dt);
+      updatePlayer(g.playerState, g.input, g.chunkManager, dt);
       applyPlayerToCamera(g.playerState, g.camera);
 
-      if (g.needsRebuild) rebuildWorld();
+      // 更新区块加载/卸载
+      const p = g.playerState.position;
+      g.chunkManager.update(p.x, p.z);
 
-      const target = getTargetBlock(g.camera, g.world);
+      // 重建脏区块网格
+      rebuildDirtyChunks();
+
+      const target = getTargetBlock(g.camera, g.chunkManager);
       if (target?.hit) {
         g.highlight.position.set(target.blockPos.x + 0.5, target.blockPos.y + 0.5, target.blockPos.z + 0.5);
         g.highlight.visible = true;
@@ -325,9 +334,8 @@ export default function MinecraftGame({ loadData, slot, onExit }: MinecraftGameP
         g.highlight.visible = false;
       }
 
-      const p = g.playerState.position;
       const targetBlockName = target?.hit
-        ? BLOCKS[getBlock(g.world, target.blockPos.x, target.blockPos.y, target.blockPos.z) as BlockType]?.name || 'unknown'
+        ? BLOCKS[g.chunkManager.getBlock(target.blockPos.x, target.blockPos.y, target.blockPos.z) as BlockType]?.name || 'unknown'
         : 'air';
       setDebugInfo({
         x: Math.round(p.x * 10) / 10,
@@ -336,6 +344,7 @@ export default function MinecraftGame({ loadData, slot, onExit }: MinecraftGameP
         fps,
         flying: g.playerState.flying,
         targetBlock: targetBlockName,
+        chunks: g.chunkManager.getChunkCount(),
       });
 
       g.renderer.render(g.scene, g.camera);
@@ -362,7 +371,7 @@ export default function MinecraftGame({ loadData, slot, onExit }: MinecraftGameP
         gameRef.current.renderer.dispose();
       }
     };
-  }, [rebuildWorld, loadData, handleSave, scheduleAutoSave]);
+  }, [rebuildDirtyChunks, loadData, handleSave, scheduleAutoSave]);
 
   useEffect(() => {
     return initGame();
@@ -396,6 +405,7 @@ export default function MinecraftGame({ loadData, slot, onExit }: MinecraftGameP
         <div style={{ color: '#FCFC00' }}>Web Minecraft</div>
         <div>FPS: {debugInfo.fps}</div>
         <div>XYZ: {debugInfo.x} / {debugInfo.y} / {debugInfo.z}</div>
+        <div>Chunks: {debugInfo.chunks}</div>
         <div style={{ color: '#88FF88' }}>Block: {debugInfo.targetBlock}</div>
         {debugInfo.flying && <div style={{ color: '#88DDFF' }}>✈ Flying</div>}
         <div style={{ color: '#aaa', marginTop: '4px' }}>H = Help</div>

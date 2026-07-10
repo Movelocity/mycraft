@@ -2,8 +2,8 @@
 // First-person movement with WASD + mouse look + pointer lock
 
 import * as THREE from 'three';
-import { WorldData, getBlock } from './world';
 import { BLOCKS } from './blocks';
+import { ChunkManager } from './chunk';
 
 const PLAYER_HEIGHT = 1.7;
 const PLAYER_SPEED = 5.0;
@@ -32,14 +32,14 @@ export function createPlayerState(spawnX: number, spawnY: number, spawnZ: number
   };
 }
 
-function isSolid(world: WorldData, x: number, y: number, z: number): boolean {
-  const block = getBlock(world, Math.floor(x), Math.floor(y), Math.floor(z));
+function isSolid(manager: ChunkManager, x: number, y: number, z: number): boolean {
+  const block = manager.getBlock(Math.floor(x), Math.floor(y), Math.floor(z));
   if (block === 'air') return false;
   const def = BLOCKS[block];
   return !def.transparent && !def.liquid;
 }
 
-function checkCollisionY(world: WorldData, pos: THREE.Vector3, dy: number): { blocked: boolean; correction: number } {
+function checkCollisionY(manager: ChunkManager, pos: THREE.Vector3, dy: number): { blocked: boolean; correction: number } {
   const newY = pos.y + dy;
   const feet = newY - PLAYER_HEIGHT;
   const head = newY;
@@ -54,7 +54,7 @@ function checkCollisionY(world: WorldData, pos: THREE.Vector3, dy: number): { bl
     const fy = Math.floor(feet);
     for (let bx = x0; bx <= x1; bx++) {
       for (let bz = z0; bz <= z1; bz++) {
-        if (isSolid(world, bx, fy, bz)) {
+        if (isSolid(manager, bx, fy, bz)) {
           return { blocked: true, correction: fy + 1 + PLAYER_HEIGHT };
         }
       }
@@ -64,7 +64,7 @@ function checkCollisionY(world: WorldData, pos: THREE.Vector3, dy: number): { bl
     const hy = Math.floor(head);
     for (let bx = x0; bx <= x1; bx++) {
       for (let bz = z0; bz <= z1; bz++) {
-        if (isSolid(world, bx, hy, bz)) {
+        if (isSolid(manager, bx, hy, bz)) {
           return { blocked: true, correction: hy - 0.01 };
         }
       }
@@ -74,7 +74,7 @@ function checkCollisionY(world: WorldData, pos: THREE.Vector3, dy: number): { bl
   return { blocked: false, correction: newY };
 }
 
-function checkCollisionXZ(world: WorldData, pos: THREE.Vector3, dx: number, dz: number): { nx: number; nz: number } {
+function checkCollisionXZ(manager: ChunkManager, pos: THREE.Vector3, dx: number, dz: number): { nx: number; nz: number } {
   let nx = pos.x + dx;
   let nz = pos.z + dz;
 
@@ -87,7 +87,7 @@ function checkCollisionXZ(world: WorldData, pos: THREE.Vector3, dx: number, dz: 
   const z1 = Math.floor(pos.z + PLAYER_RADIUS);
   for (let by = yFeet; by <= yHead; by++) {
     for (let bz = z0; bz <= z1; bz++) {
-      if (isSolid(world, testX, by, bz)) {
+      if (isSolid(manager, testX, by, bz)) {
         nx = pos.x;
         break;
       }
@@ -100,7 +100,7 @@ function checkCollisionXZ(world: WorldData, pos: THREE.Vector3, dx: number, dz: 
   const x1 = Math.floor(nx + PLAYER_RADIUS);
   for (let by = yFeet; by <= yHead; by++) {
     for (let bx = x0; bx <= x1; bx++) {
-      if (isSolid(world, bx, by, testZ)) {
+      if (isSolid(manager, bx, by, testZ)) {
         nz = pos.z;
         break;
       }
@@ -123,7 +123,7 @@ export interface InputState {
 export function updatePlayer(
   state: PlayerState,
   input: InputState,
-  world: WorldData,
+  manager: ChunkManager,
   dt: number
 ): void {
   const speed = PLAYER_SPEED * (input.sprint ? SPRINT_MULTIPLIER : 1.0);
@@ -171,7 +171,7 @@ export function updatePlayer(
 
   // Apply Y movement with collision
   const dy = state.velocity.y * dt;
-  const yResult = checkCollisionY(world, state.position, dy);
+  const yResult = checkCollisionY(manager, state.position, dy);
   if (yResult.blocked) {
     if (state.velocity.y < 0) {
       state.onGround = true;
@@ -188,7 +188,7 @@ export function updatePlayer(
   // Apply XZ movement with collision
   const dx = state.velocity.x * dt;
   const dz = state.velocity.z * dt;
-  const xzResult = checkCollisionXZ(world, state.position, dx, dz);
+  const xzResult = checkCollisionXZ(manager, state.position, dx, dz);
   state.position.x = xzResult.nx;
   state.position.z = xzResult.nz;
 }
@@ -203,7 +203,7 @@ export function applyPlayerToCamera(state: PlayerState, camera: THREE.Perspectiv
 // Raycasting for block targeting
 export function getTargetBlock(
   camera: THREE.PerspectiveCamera,
-  world: WorldData,
+  manager: ChunkManager,
   maxDistance: number = 6
 ): { hit: boolean; blockPos: THREE.Vector3; faceNormal: THREE.Vector3 } | null {
   const direction = new THREE.Vector3(0, 0, -1);
@@ -219,7 +219,7 @@ export function getTargetBlock(
     const by = Math.floor(pos.y);
     const bz = Math.floor(pos.z);
 
-    const block = getBlock(world, bx, by, bz);
+    const block = manager.getBlock(bx, by, bz);
     if (block !== 'air' && !BLOCKS[block].liquid) {
       // Compute face normal from previous position
       const pbx = Math.floor(prevPos.x);
