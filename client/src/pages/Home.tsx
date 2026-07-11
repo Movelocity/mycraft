@@ -1,18 +1,22 @@
 // Home.tsx — Entry point for Web Minecraft Demo
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import MinecraftGame, { type GameInitData } from '@/components/MinecraftGame';
-import { listSaves, loadGame, type SaveInfo } from '@/lib/minecraft/save';
+import { listSaves, loadGame, deleteSave, type SaveInfo } from '@/lib/minecraft/save';
 import { isMobileUA, enterFullscreen, isLandscape } from '@/utils/mobile';
 
 export default function Home() {
   const [gameData, setGameData] = useState<{ data: GameInitData; slot: number; mobile: boolean } | null>(null);
   const [saves, setSaves] = useState<SaveInfo[]>([]);
   const [showRotateHint, setShowRotateHint] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
+  const [mobileOrientationBlock, setMobileOrientationBlock] = useState<number | null>(null);
   const isMobile = isMobileUA();
 
+  const refreshSaves = useCallback(() => listSaves().then(setSaves), []);
+
   useEffect(() => {
-    listSaves().then(setSaves);
-  }, []);
+    refreshSaves();
+  }, [refreshSaves]);
 
   useEffect(() => {
     if (!gameData?.mobile) return;
@@ -26,10 +30,26 @@ export default function Home() {
     };
   }, [gameData?.mobile]);
 
-  const handleSelectSlot = async (slot: number, mobile = false) => {
-    if (mobile) {
-      await enterFullscreen().catch(() => {});
-    }
+  // 移动端：监听方向变化，横屏后自动进入游戏
+  useEffect(() => {
+    if (mobileOrientationBlock === null) return;
+    const tryEnter = async () => {
+      if (!isLandscape()) return;
+      const slot = mobileOrientationBlock;
+      setMobileOrientationBlock(null);
+      await doEnterGame(slot, true);
+    };
+    tryEnter();
+    window.addEventListener('resize', tryEnter);
+    window.addEventListener('orientationchange', tryEnter);
+    return () => {
+      window.removeEventListener('resize', tryEnter);
+      window.removeEventListener('orientationchange', tryEnter);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mobileOrientationBlock]);
+
+  const doEnterGame = async (slot: number, mobile: boolean) => {
     const saveData = await loadGame(slot);
     if (saveData) {
       const { restoreFromSave } = await import('@/lib/minecraft/save');
@@ -41,10 +61,67 @@ export default function Home() {
     }
   };
 
+  const handleSelectSlot = async (slot: number) => {
+    if (isMobile) {
+      await enterFullscreen().catch(() => {});
+      if (!isLandscape()) {
+        setMobileOrientationBlock(slot);
+        return;
+      }
+      await doEnterGame(slot, true);
+    } else {
+      await doEnterGame(slot, false);
+    }
+  };
+
+  const handleDeleteClick = (e: React.MouseEvent, slot: number) => {
+    e.stopPropagation();
+    setConfirmDelete(slot);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (confirmDelete === null) return;
+    await deleteSave(confirmDelete);
+    setConfirmDelete(null);
+    refreshSaves();
+  };
+
   const handleBackToMenu = () => {
     setGameData(null);
-    listSaves().then(setSaves);
+    refreshSaves();
   };
+
+  if (mobileOrientationBlock !== null) {
+    return (
+      <div style={{
+        position: 'fixed', inset: 0, zIndex: 9999,
+        background: '#0a0a0a',
+        display: 'flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center',
+        color: '#fff', fontFamily: "'Press Start 2P', monospace",
+        textAlign: 'center', gap: 24, padding: 24,
+      }}>
+        <div style={{ fontSize: 64, lineHeight: 1 }}>📱</div>
+        <div style={{ fontSize: 11, lineHeight: 2, color: '#FCFC00', textShadow: '2px 2px 0 #000' }}>
+          请旋转设备至横屏
+        </div>
+        <div style={{ fontSize: 8, color: '#aaa', lineHeight: 2 }}>
+          横屏体验更佳，竖屏无法进入游戏
+        </div>
+        <button
+          onClick={() => setMobileOrientationBlock(null)}
+          style={{
+            marginTop: 8,
+            background: 'transparent', border: '2px solid #555',
+            color: '#777', fontFamily: "'Press Start 2P', monospace",
+            fontSize: 7, padding: '8px 16px', cursor: 'pointer',
+          }}
+        >
+          返回菜单
+        </button>
+      </div>
+    );
+  }
 
   if (gameData) {
     return (
@@ -109,36 +186,114 @@ export default function Home() {
       {/* Save Slots */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', alignItems: 'center', marginBottom: '24px', width: '90%', maxWidth: '360px' }}>
         {saves.map((save) => (
-          <button
-            key={save.slot}
-            onClick={() => handleSelectSlot(save.slot, isMobile)}
-            style={{
-              background: save.timestamp > 0 ? '#5D8A3C' : '#444',
-              border: '3px solid #000',
-              borderRight: '3px solid #2A2A2A',
-              borderBottom: '3px solid #2A2A2A',
-              color: '#fff',
-              fontFamily: "'Press Start 2P', monospace",
-              fontSize: 'clamp(8px, 2vw, 10px)',
-              padding: '12px 24px',
-              cursor: 'pointer',
-              textShadow: '2px 2px 0 #000',
-              width: '100%',
-              textAlign: 'center',
-              lineHeight: '2',
-            }}
-          >
-            <div>{save.name || `存档 ${save.slot}`}</div>
-            {save.timestamp > 0 ? (
-              <div style={{ fontSize: 'clamp(6px, 1.5vw, 7px)', color: '#ccc' }}>
-                {new Date(save.timestamp).toLocaleDateString()} {new Date(save.timestamp).toLocaleTimeString()}
-              </div>
-            ) : (
-              <div style={{ fontSize: 'clamp(6px, 1.5vw, 7px)', color: '#888' }}>空存档</div>
+          <div key={save.slot} style={{ width: '100%', position: 'relative' }}>
+            <button
+              onClick={() => handleSelectSlot(save.slot)}
+              style={{
+                width: '100%',
+                background: save.timestamp > 0 ? '#5D8A3C' : '#444',
+                border: '3px solid #000',
+                borderRight: '3px solid #2A2A2A',
+                borderBottom: '3px solid #2A2A2A',
+                color: '#fff',
+                fontFamily: "'Press Start 2P', monospace",
+                fontSize: 'clamp(8px, 2vw, 10px)',
+                padding: '12px 16px',
+                cursor: 'pointer',
+                textShadow: '2px 2px 0 #000',
+                textAlign: 'center',
+                lineHeight: '2',
+              }}
+            >
+              <div>{save.name || `存档 ${save.slot}`}</div>
+              {save.timestamp > 0 ? (
+                <div style={{ fontSize: 'clamp(6px, 1.5vw, 7px)', color: '#ccc' }}>
+                  {new Date(save.timestamp).toLocaleDateString()} {new Date(save.timestamp).toLocaleTimeString()}
+                </div>
+              ) : (
+                <div style={{ fontSize: 'clamp(6px, 1.5vw, 7px)', color: '#888' }}>空存档</div>
+              )}
+            </button>
+            {save.timestamp > 0 && (
+              <button
+                onClick={(e) => handleDeleteClick(e, save.slot)}
+                title="删除存档"
+                style={{
+                  position: 'absolute', top: 0, right: 0, bottom: 0,
+                  background: 'none', border: 'none',
+                  color: 'rgba(255,255,255,0.45)',
+                  fontFamily: "'Press Start 2P', monospace",
+                  fontSize: 11,
+                  padding: '0 12px',
+                  cursor: 'pointer',
+                  lineHeight: 1,
+                }}
+              >
+                ✕
+              </button>
             )}
-          </button>
+          </div>
         ))}
       </div>
+
+      {/* Delete Confirm Modal */}
+      {confirmDelete !== null && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 9998,
+          background: 'rgba(0,0,0,0.75)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <div style={{
+            background: '#222',
+            border: '4px solid #000',
+            borderRight: '4px solid #111',
+            borderBottom: '4px solid #111',
+            padding: '28px 32px',
+            fontFamily: "'Press Start 2P', monospace",
+            color: '#fff',
+            textAlign: 'center',
+            maxWidth: 320,
+            width: '85%',
+          }}>
+            <div style={{ fontSize: 10, marginBottom: 16, lineHeight: 2, textShadow: '2px 2px 0 #000' }}>
+              删除存档 {confirmDelete}？
+            </div>
+            <div style={{ fontSize: 7, color: '#aaa', marginBottom: 24, lineHeight: 2 }}>
+              此操作无法撤销
+            </div>
+            <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+              <button
+                onClick={handleConfirmDelete}
+                style={{
+                  background: '#7a1a1a',
+                  border: '3px solid #000',
+                  borderRight: '3px solid #2A2A2A',
+                  borderBottom: '3px solid #2A2A2A',
+                  color: '#fff',
+                  fontFamily: "'Press Start 2P', monospace",
+                  fontSize: 8, padding: '10px 16px', cursor: 'pointer',
+                }}
+              >
+                确认删除
+              </button>
+              <button
+                onClick={() => setConfirmDelete(null)}
+                style={{
+                  background: '#444',
+                  border: '3px solid #000',
+                  borderRight: '3px solid #2A2A2A',
+                  borderBottom: '3px solid #2A2A2A',
+                  color: '#fff',
+                  fontFamily: "'Press Start 2P', monospace",
+                  fontSize: 8, padding: '10px 16px', cursor: 'pointer',
+                }}
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Tips */}
       <div style={{
