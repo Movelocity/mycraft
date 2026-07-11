@@ -19,6 +19,7 @@ interface Props {
   hotbarIndex: number;
   onHotbarChange: (i: number) => void;
   onPause: () => void;
+  getBreakTargetKey: () => string | null;
   onPlaceBlock: () => void;
   onBreakBlock: () => void;
 }
@@ -40,6 +41,7 @@ export default function MobileControls({
   hotbarIndex,
   onHotbarChange,
   onPause,
+  getBreakTargetKey,
   onPlaceBlock,
   onBreakBlock,
 }: Props) {
@@ -69,6 +71,7 @@ export default function MobileControls({
   } = useMobileControls({
     getInput: () => gameRef.current?.input ?? null,
     getPlayerState: () => gameRef.current?.playerState ?? null,
+    getBreakTargetKey,
     onPlaceBlock,
     onBreakBlock,
     onBreakProgress: handleBreakProgress,
@@ -173,7 +176,7 @@ function BreakProgressRing({ progress, x, y }: { progress: number; x: number; y:
           cy={RING_SIZE / 2}
           r={RING_R}
           fill="none"
-          stroke="rgba(255,255,255,0.45)"
+          stroke="rgba(255,255,255,0.25)"
           strokeWidth={3}
         />
       </svg>

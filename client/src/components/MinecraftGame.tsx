@@ -22,6 +22,7 @@ import {
   InputState,
 } from '@/lib/minecraft/player';
 import MobileControls from '@/components/mobile/MobileControls';
+import HeldItem from '@/components/HeldItem';
 import { isMobileUA } from '@/utils/mobile';
 
 export interface GameInitData {
@@ -71,7 +72,14 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
   const [isPaused, setIsPaused] = useState(!isMobile);
   const [hearts] = useState(10);
   const [saveNotification, setSaveNotification] = useState<string | null>(null);
+  const [isMoving, setIsMoving] = useState(false);
+  const [isUnderwater, setIsUnderwater] = useState(false);
+  const [actionTrigger, setActionTrigger] = useState(0);
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const movingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const underwaterRef = useRef(false);
+  const setActionTriggerRef = useRef(setActionTrigger);
+  setActionTriggerRef.current = setActionTrigger;
 
   const rebuildDirtyChunks = useCallback(() => {
     const g = gameRef.current;
@@ -131,6 +139,15 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
       setTimeout(() => setSaveNotification(null), 2000);
     }, 30000);
   }, [slot]);
+
+  const getBreakTargetKey = useCallback(() => {
+    const g = gameRef.current;
+    if (!g) return null;
+    const target = getTargetBlock(g.camera, g.chunkManager);
+    if (!target?.hit) return null;
+    const { x, y, z } = target.blockPos;
+    return `${x},${y},${z}`;
+  }, []);
 
   const initGame = useCallback(() => {
     const canvas = canvasRef.current;
@@ -202,6 +219,7 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
       setIsPaused,
       handleSave,
       scheduleAutoSave,
+      () => setActionTriggerRef.current(t => t + 1),
     );
 
     // Prevent pinch-to-zoom on macOS trackpad (desktop only)
@@ -250,6 +268,17 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
       updatePlayer(g.playerState, g.input, g.chunkManager, dt);
       applyPlayerToCamera(g.playerState, g.camera);
 
+      const cameraBlock = g.chunkManager.getBlock(
+        Math.floor(g.camera.position.x),
+        Math.floor(g.camera.position.y),
+        Math.floor(g.camera.position.z),
+      );
+      const nextUnderwater = cameraBlock === 'water';
+      if (underwaterRef.current !== nextUnderwater) {
+        underwaterRef.current = nextUnderwater;
+        setIsUnderwater(nextUnderwater);
+      }
+
       // 更新区块加载/卸载
       const p = g.playerState.position;
       g.chunkManager.update(p.x, p.z);
@@ -277,6 +306,18 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
         targetBlock: targetBlockName,
         chunks: g.chunkManager.getChunkCount(),
       });
+
+      // Detect player movement for held item bob animation
+      const vel = g.playerState.velocity;
+      const isPlayerMoving = (vel.x * vel.x + vel.z * vel.z) > 0.5;
+      if (isPlayerMoving) {
+        if (!movingTimerRef.current) setIsMoving(true);
+        if (movingTimerRef.current) clearTimeout(movingTimerRef.current);
+        movingTimerRef.current = setTimeout(() => {
+          setIsMoving(false);
+          movingTimerRef.current = null;
+        }, 150);
+      }
 
       g.renderer.render(g.scene, g.camera);
       g.animFrame = requestAnimationFrame(gameLoop);
@@ -313,7 +354,26 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
       style={{ fontFamily: "'Press Start 2P', monospace", height: '100dvh' }}
     >
       {/* Game Canvas */}
-      <canvas ref={canvasRef} className="block" style={{ touchAction: 'none', width: '100%', height: '100%' }} />
+      <canvas
+        ref={canvasRef}
+        className="block"
+        style={{
+          touchAction: 'none',
+          width: '100%',
+          height: '100%',
+          filter: isUnderwater ? 'brightness(0.9) contrast(0.98) saturate(1.05)' : 'none',
+          transition: 'filter 180ms ease',
+        }}
+      />
+
+      {isUnderwater && (
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            background: 'rgba(48, 145, 255, 0.22)',
+          }}
+        />
+      )}
 
       {/* Crosshair */}
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -356,6 +416,16 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
       {/* Hotbar — hidden on mobile (rendered inside MobileControls) */}
       {!isMobile && <HotbarHUD hotbarIndex={hotbarIndex} />}
 
+      {/* Held item — right hand */}
+      {!isPaused && (
+        <HeldItem
+          blockType={HOTBAR_BLOCKS[hotbarIndex]}
+          isMoving={isMoving}
+          placeTrigger={actionTrigger}
+          breakTrigger={actionTrigger}
+        />
+      )}
+
       {/* Mobile controls overlay */}
       {isMobile && (
         <MobileControls
@@ -368,6 +438,7 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
             if (gameRef.current) gameRef.current.hotbarIndex = i;
           }}
           onPause={() => setIsPaused(true)}
+          getBreakTargetKey={getBreakTargetKey}
           onPlaceBlock={() => {
             const g = gameRef.current;
             if (!g) return;
@@ -381,6 +452,7 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
             g.chunkManager.setBlock(px, py, pz, blockType);
             g.changes.push([px, py, pz, blockType]);
             scheduleAutoSave();
+            setActionTrigger(t => t + 1);
           }}
           onBreakBlock={() => {
             const g = gameRef.current;
@@ -391,6 +463,7 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
             g.chunkManager.setBlock(bx, by, bz, 'air');
             g.changes.push([bx, by, bz, 'air']);
             scheduleAutoSave();
+            setActionTrigger(t => t + 1);
           }}
         />
       )}
@@ -645,6 +718,7 @@ function attachDesktopHandlers(
   setIsPaused: (v: boolean) => void,
   handleSave: () => void,
   scheduleAutoSave: () => void,
+  onAction: () => void,
 ): () => void {
   const onKeyDown = (e: KeyboardEvent) => {
     const g = gameRef.current;
@@ -705,6 +779,7 @@ function attachDesktopHandlers(
       g.chunkManager.setBlock(bx, by, bz, 'air');
       g.changes.push([bx, by, bz, 'air']);
       scheduleAutoSave();
+      onAction();
     } else if (e.button === 2) {
       const px = target.blockPos.x + target.faceNormal.x;
       const py = target.blockPos.y + target.faceNormal.y;
@@ -714,6 +789,7 @@ function attachDesktopHandlers(
       g.chunkManager.setBlock(px, py, pz, blockType);
       g.changes.push([px, py, pz, blockType]);
       scheduleAutoSave();
+      onAction();
     }
   };
 

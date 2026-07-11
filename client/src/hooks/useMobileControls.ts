@@ -4,7 +4,8 @@ import { InputState } from '@/lib/minecraft/player';
 const TOUCH_SENS = 0.005;
 const TAP_MAX_MS = 300;
 const TAP_MAX_MOVE_PX = 10;
-const BREAK_DURATION_MS = 300; // time to fill the ring and break
+const BREAK_DURATION_MS = 400; // time to fill the ring and break
+const BREAK_COOLDOWN_MS = TAP_MAX_MS/2;
 
 interface TouchState {
   id: number;
@@ -15,7 +16,9 @@ interface TouchState {
   startTime: number;
   // long-press break state
   breaking: boolean;
+  breakTargetKey: string | null;
   breakStartTime: number | null;
+  breakCooldownUntil: number | null;
   breakRaf: number | null;
   cancelled: boolean;
 }
@@ -23,6 +26,7 @@ interface TouchState {
 interface UseMobileControlsOptions {
   getInput: () => InputState | null;
   getPlayerState: () => { yaw: number; pitch: number; flying: boolean } | null;
+  getBreakTargetKey: () => string | null;
   onPlaceBlock: () => void;
   onBreakBlock: () => void;
   onBreakProgress: (progress: number, x: number, y: number) => void;
@@ -32,6 +36,7 @@ interface UseMobileControlsOptions {
 export function useMobileControls({
   getInput,
   getPlayerState,
+  getBreakTargetKey,
   onPlaceBlock,
   onBreakBlock,
   onBreakProgress,
@@ -104,32 +109,62 @@ export function useMobileControls({
       ref.breakRaf = null;
     }
     ref.breaking = false;
+    ref.breakTargetKey = null;
+    ref.breakStartTime = null;
+    ref.breakCooldownUntil = null;
     ref.cancelled = true;
     onBreakCancel();
   }, [onBreakCancel]);
 
   const startBreakLoop = useCallback((ref: TouchState) => {
     ref.breaking = true;
-    ref.breakStartTime = performance.now();
+    ref.breakTargetKey = null;
+    ref.breakStartTime = null;
+    ref.breakCooldownUntil = null;
 
     const tick = (now: number) => {
       if (!ref.breaking || ref.cancelled) return;
+      if (ref.breakCooldownUntil !== null) {
+        if (now < ref.breakCooldownUntil) {
+          ref.breakRaf = requestAnimationFrame(tick);
+          return;
+        }
+        ref.breakCooldownUntil = null;
+      }
+
+      const targetKey = getBreakTargetKey();
+      if (!targetKey) {
+        if (ref.breakTargetKey !== null) {
+          onBreakCancel();
+        }
+        ref.breakTargetKey = null;
+        ref.breakStartTime = null;
+        ref.breakRaf = requestAnimationFrame(tick);
+        return;
+      }
+
+      if (targetKey !== ref.breakTargetKey) {
+        ref.breakTargetKey = targetKey;
+        ref.breakStartTime = now;
+      }
+
       const elapsed = now - (ref.breakStartTime ?? now);
       const progress = Math.min(elapsed / BREAK_DURATION_MS, 1);
-      onBreakProgress(progress, ref.startX, ref.startY);
+      onBreakProgress(progress, ref.lastX, ref.lastY);
 
       if (progress >= 1) {
-        ref.breaking = false;
-        ref.breakRaf = null;
+        ref.breakTargetKey = null;
+        ref.breakStartTime = null;
+        ref.breakCooldownUntil = now + BREAK_COOLDOWN_MS;
         onBreakBlock();
         onBreakCancel();
-        rightTouchRef.current = null;
+        ref.breakRaf = requestAnimationFrame(tick);
         return;
       }
       ref.breakRaf = requestAnimationFrame(tick);
     };
     ref.breakRaf = requestAnimationFrame(tick);
-  }, [onBreakBlock, onBreakProgress, onBreakCancel]);
+  }, [getBreakTargetKey, onBreakBlock, onBreakProgress, onBreakCancel]);
 
   // ── Right-half touch events ──────────────────────────────────────────────────
   const onRightTouchStart = useCallback((e: React.TouchEvent) => {
@@ -144,7 +179,9 @@ export function useMobileControls({
       lastY: touch.clientY,
       startTime: Date.now(),
       breaking: false,
+      breakTargetKey: null,
       breakStartTime: null,
+      breakCooldownUntil: null,
       breakRaf: null,
       cancelled: false,
     };
@@ -166,15 +203,6 @@ export function useMobileControls({
       const touch = e.changedTouches[i];
       if (touch.identifier !== ref.id) continue;
 
-      const dx = touch.clientX - ref.startX;
-      const dy = touch.clientY - ref.startY;
-      const moved = Math.sqrt(dx * dx + dy * dy);
-
-      // Cancel break ring if finger moved too far
-      if (moved > TAP_MAX_MOVE_PX && ref.breaking) {
-        cancelBreak(ref);
-      }
-
       const movX = touch.clientX - ref.lastX;
       const movY = touch.clientY - ref.lastY;
       ref.lastX = touch.clientX;
@@ -187,7 +215,7 @@ export function useMobileControls({
       state.pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, state.pitch));
       break;
     }
-  }, [getPlayerState, cancelBreak]);
+  }, [getPlayerState]);
 
   const onRightTouchEnd = useCallback((e: React.TouchEvent) => {
     const ref = rightTouchRef.current;

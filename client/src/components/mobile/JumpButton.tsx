@@ -1,4 +1,4 @@
-import { useRef, useCallback } from 'react';
+import { useRef, useCallback, useEffect } from 'react';
 
 interface Props {
   flying: boolean;
@@ -65,15 +65,31 @@ export default function JumpButton({
   onToggleFly,
 }: Props) {
   const lastTapRef = useRef(0);
+  const prevFlyingRef = useRef(flying);
+
+  useEffect(() => {
+    if (prevFlyingRef.current === flying) return;
+
+    if (flying) {
+      onJumpRelease();
+    } else {
+      onAscendRelease();
+      onDescendRelease();
+    }
+    prevFlyingRef.current = flying;
+  }, [flying, onJumpRelease, onAscendRelease, onDescendRelease]);
 
   const handleJumpDown = useCallback(() => {
     const now = Date.now();
     if (now - lastTapRef.current < 400) {
       onToggleFly();
+      onJumpRelease();
+      lastTapRef.current = 0;
+      return;
     }
     lastTapRef.current = now;
     onJump();
-  }, [onJump, onToggleFly]);
+  }, [onJump, onJumpRelease, onToggleFly]);
 
   if (flying) {
     return (
@@ -81,15 +97,14 @@ export default function JumpButton({
         style={{
           position: 'absolute',
           right: 88,
-          bottom: 80,
+          bottom: 50,
           display: 'flex',
           flexDirection: 'column',
-          gap: 6,
+          gap: 12,
           pointerEvents: 'auto',
         }}
       >
         <SquareBtn label="↑" onDown={onAscend} onUp={onAscendRelease} />
-        <SquareBtn label="✈" onDown={onToggleFly} onUp={() => {}} />
         <SquareBtn label="↓" onDown={onDescend} onUp={onDescendRelease} />
       </div>
     );
@@ -100,7 +115,7 @@ export default function JumpButton({
       style={{
         position: 'absolute',
         right: 90,
-        bottom: 90,
+        bottom: 120,
         pointerEvents: 'auto',
       }}
     >

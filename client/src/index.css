@@ -183,3 +183,15 @@
     }
   }
 }
+
+/* Held item walking bob animation */
+@keyframes held-item-bob {
+  0%, 100% { transform: rotate(-20deg) translateY(0px); }
+  25% { transform: rotate(-15deg) translateY(-4px); }
+  50% { transform: rotate(-20deg) translateY(0px); }
+  75% { transform: rotate(-25deg) translateY(-4px); }
+}
+
+.held-item-bob {
+  animation: held-item-bob 0.45s ease-in-out infinite;
+}

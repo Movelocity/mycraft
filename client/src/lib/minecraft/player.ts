@@ -265,6 +265,11 @@ export function updatePlayer(
   if (yResult.blocked) {
     if (state.velocity.y < 0) {
       state.onGround = true;
+      const flyingDown = state.flying && (input.sneak || input.flyDown);
+      if (flyingDown) {
+        state.flying = false;
+        input.flyDown = false;
+      }
     }
     state.velocity.y = 0;
     state.position.y = yResult.correction;

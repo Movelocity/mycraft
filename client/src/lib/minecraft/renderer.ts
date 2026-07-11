@@ -188,6 +188,7 @@ export function buildWorldMesh(world: WorldData): THREE.Group {
       opacity: 0.85,
       depthWrite: false,
       alphaTest: 0.1,
+      side: THREE.DoubleSide,
     });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.name = 'transparent';
@@ -283,7 +284,7 @@ export function buildChunkMesh(chunk: Chunk, manager: ChunkManager): THREE.Group
 
     const mat = new THREE.MeshLambertMaterial({
       map: texture, vertexColors: true,
-      transparent: true, opacity: 0.85, depthWrite: false, alphaTest: 0.1,
+      transparent: true, opacity: 0.85, depthWrite: false, alphaTest: 0.1, side: THREE.DoubleSide,
     });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.name = 'transparent';
