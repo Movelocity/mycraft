@@ -46,8 +46,7 @@ export function createPlayerState(spawnX: number, spawnY: number, spawnZ: number
 function isSolid(manager: ChunkManager, x: number, y: number, z: number): boolean {
   const block = manager.getBlock(Math.floor(x), Math.floor(y), Math.floor(z));
   if (block === 'air') return false;
-  const def = BLOCKS[block];
-  return !def.transparent && !def.liquid;
+  return BLOCKS[block].solid;
 }
 
 function checkCollisionY(manager: ChunkManager, pos: THREE.Vector3, dy: number): { blocked: boolean; correction: number } {
@@ -225,12 +224,13 @@ export function updatePlayer(
   const normalizedZ = moveLen > 0 ? (hasAnalog ? worldZ : worldZ / moveLen) : 0;
 
   if (state.flying) {
-    // Flying mode: Space = up, Shift = down
-    state.velocity.x = normalizedX * speed;
-    state.velocity.z = normalizedZ * speed;
+    // Flying mode: Space = up, Shift = down (2x walk speed)
+    const flySpeed = speed * 1.6;
+    state.velocity.x = normalizedX * flySpeed;
+    state.velocity.z = normalizedZ * flySpeed;
     state.velocity.y = 0;
-    if (input.jump) state.velocity.y = speed;
-    if (input.sneak) state.velocity.y = -speed;
+    if (input.jump) state.velocity.y = flySpeed;
+    if (input.sneak) state.velocity.y = -flySpeed;
     state.sneaking = false;
   } else {
     // Normal mode
@@ -291,6 +291,27 @@ export function applyPlayerToCamera(state: PlayerState, camera: THREE.Perspectiv
   camera.rotation.order = 'YXZ';
   camera.rotation.y = state.yaw;
   camera.rotation.x = state.pitch;
+}
+
+// Check if the player's body AABB overlaps a block at (bx, by, bz)
+export function isPlayerOverlappingBlock(
+  state: PlayerState,
+  bx: number,
+  by: number,
+  bz: number,
+): boolean {
+  const feetY = state.position.y - PLAYER_HEIGHT;
+  const headY = state.position.y;
+  const playerXMin = state.position.x - PLAYER_RADIUS;
+  const playerXMax = state.position.x + PLAYER_RADIUS;
+  const playerZMin = state.position.z - PLAYER_RADIUS;
+  const playerZMax = state.position.z + PLAYER_RADIUS;
+
+  return (
+    playerXMax > bx && playerXMin < bx + 1 &&
+    playerZMax > bz && playerZMin < bz + 1 &&
+    headY > by && feetY < by + 1
+  );
 }
 
 // Raycasting for block targeting

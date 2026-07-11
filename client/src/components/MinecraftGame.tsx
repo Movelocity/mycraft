@@ -18,6 +18,7 @@ import {
   updatePlayer,
   applyPlayerToCamera,
   getTargetBlock,
+  isPlayerOverlappingBlock,
   InputState,
 } from '@/lib/minecraft/player';
 import MobileControls from '@/components/mobile/MobileControls';
@@ -366,6 +367,7 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
             const px = target.blockPos.x + target.faceNormal.x;
             const py = target.blockPos.y + target.faceNormal.y;
             const pz = target.blockPos.z + target.faceNormal.z;
+            if (isPlayerOverlappingBlock(g.playerState, px, py, pz)) return;
             const blockType = HOTBAR_BLOCKS[g.hotbarIndex];
             g.chunkManager.setBlock(px, py, pz, blockType);
             g.changes.push([px, py, pz, blockType]);
@@ -698,6 +700,7 @@ function attachDesktopHandlers(
       const px = target.blockPos.x + target.faceNormal.x;
       const py = target.blockPos.y + target.faceNormal.y;
       const pz = target.blockPos.z + target.faceNormal.z;
+      if (isPlayerOverlappingBlock(g.playerState, px, py, pz)) return;
       const blockType = HOTBAR_BLOCKS[g.hotbarIndex];
       g.chunkManager.setBlock(px, py, pz, blockType);
       g.changes.push([px, py, pz, blockType]);

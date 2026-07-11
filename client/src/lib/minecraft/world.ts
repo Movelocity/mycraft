@@ -69,10 +69,10 @@ type Biome = 'plains' | 'hills' | 'river' | 'forest';
 
 function getBiome(x: number, z: number, seed: number): Biome {
   const biomeNoise = octaveNoise(x / 256, z / 256, seed + 31337, 2, 0.5);
-  const riverNoise = octaveNoise(x / 80, z / 80, seed + 55555, 3, 0.5);
+  const riverNoise = octaveNoise(x / 160, z / 160, seed + 55555, 2, 0.5);
   const riverBand = Math.abs(riverNoise - 0.5);
 
-  if (riverBand < 0.018) return 'river';
+  if (riverBand < 0.008) return 'river';
   if (biomeNoise < 0.35) return 'plains';
   if (biomeNoise < 0.60) return 'hills';
   if (biomeNoise < 0.72) return 'forest';
@@ -87,21 +87,21 @@ function smoothstep(edge0: number, edge1: number, x: number): number {
 function getRawTerrainHeight(biome: Biome, baseNoise: number, detailNoise: number): number {
   switch (biome) {
     case 'river':  return SEA_LEVEL - 2 - detailNoise * 2;
-    case 'plains': return SEA_LEVEL + 1 + baseNoise * 5 - 2 + detailNoise * 1.5;
-    case 'hills':  return SEA_LEVEL + baseNoise * 18 - 4 + detailNoise * 4;
-    case 'forest': return SEA_LEVEL + 2 + baseNoise * 10 - 2 + detailNoise * 2;
-    default:       return SEA_LEVEL + baseNoise * 14 - 3;
+    case 'plains': return SEA_LEVEL + 1 + baseNoise * 3 + detailNoise;
+    case 'hills':  return SEA_LEVEL + 2 + baseNoise * 8 + detailNoise * 2;
+    case 'forest': return SEA_LEVEL + 1 + baseNoise * 5 + detailNoise * 1.5;
+    default:       return SEA_LEVEL + 1 + baseNoise * 6 + detailNoise * 1.5;
   }
 }
 
 function getTerrainHeight(x: number, z: number, seed: number): number {
   const baseNoise = octaveNoise(x / 96, z / 96, seed, 4, 0.5);
   const detailNoise = octaveNoise(x / 32, z / 32, seed + 2000, 2, 0.4);
-  const riverNoise = octaveNoise(x / 80, z / 80, seed + 55555, 3, 0.5);
+  const riverNoise = octaveNoise(x / 160, z / 160, seed + 55555, 2, 0.5);
   const riverBand = Math.abs(riverNoise - 0.5);
 
-  const RIVER_EDGE = 0.018;
-  const RIVER_SHORE = 0.08;
+  const RIVER_EDGE = 0.008;
+  const RIVER_SHORE = 0.04;
 
   let height: number;
   if (riverBand < RIVER_EDGE) {
@@ -163,9 +163,9 @@ export function generateWorld(seed: number = 42, radius: number = 24): WorldData
       const biome = getBiome(x, z, seed);
       const terrainH = getTerrainHeight(x, z, seed);
       const riverBand = Math.abs(
-        octaveNoise(x / 80, z / 80, seed + 55555, 3, 0.5) - 0.5,
+        octaveNoise(x / 160, z / 160, seed + 55555, 2, 0.5) - 0.5,
       );
-      const nearRiver = riverBand < 0.08;
+      const nearRiver = riverBand < 0.04;
 
       for (let y = 0; y <= terrainH; y++) {
         let blockType: BlockType;
