@@ -219,11 +219,18 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
     const onResize = () => {
       const g = gameRef.current;
       if (!g) return;
-      g.renderer.setSize(canvas.clientWidth, canvas.clientHeight);
-      g.camera.aspect = canvas.clientWidth / canvas.clientHeight;
+      // Use window dimensions for accurate viewport size (handles dvh and fullscreen changes)
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      g.renderer.setSize(w, h);
+      g.camera.aspect = w / h;
       g.camera.updateProjectionMatrix();
     };
     window.addEventListener('resize', onResize);
+    document.addEventListener('fullscreenchange', onResize);
+    // ResizeObserver catches dimension changes from banner dismiss, address bar, etc.
+    const resizeObserver = new ResizeObserver(onResize);
+    resizeObserver.observe(canvas);
 
     let fpsCount = 0, fpsTimer = 0, fps = 0;
 
@@ -286,6 +293,8 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
         document.removeEventListener('wheel', preventWheelZoom);
       }
       window.removeEventListener('resize', onResize);
+      document.removeEventListener('fullscreenchange', onResize);
+      resizeObserver.disconnect();
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
       if (gameRef.current) {
         cancelAnimationFrame(gameRef.current.animFrame);
@@ -300,11 +309,11 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
 
   return (
     <div
-      className="relative w-full h-screen bg-black overflow-hidden select-none"
-      style={{ fontFamily: "'Press Start 2P', monospace" }}
+      className="relative w-full bg-black overflow-hidden select-none"
+      style={{ fontFamily: "'Press Start 2P', monospace", height: '100dvh' }}
     >
       {/* Game Canvas */}
-      <canvas ref={canvasRef} className="w-full h-full block" style={{ touchAction: 'none' }} />
+      <canvas ref={canvasRef} className="block" style={{ touchAction: 'none', width: '100%', height: '100%' }} />
 
       {/* Crosshair */}
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
