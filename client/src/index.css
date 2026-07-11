@@ -186,12 +186,17 @@
 
 /* Held item walking bob animation */
 @keyframes held-item-bob {
-  0%, 100% { transform: rotate(-20deg) translateY(0px); }
-  25% { transform: rotate(-15deg) translateY(-4px); }
-  50% { transform: rotate(-20deg) translateY(0px); }
-  75% { transform: rotate(-25deg) translateY(-4px); }
+  0%, 100% { transform: rotate(-20deg) translate3d(0, 0, 0); }
+  12.5% { transform: rotate(-16.5deg) translate3d(0, -2px, 0); }
+  25% { transform: rotate(-15deg) translate3d(0, -4px, 0); }
+  37.5% { transform: rotate(-16.5deg) translate3d(0, -2px, 0); }
+  50% { transform: rotate(-20deg) translate3d(0, 0, 0); }
+  62.5% { transform: rotate(-23.5deg) translate3d(0, -2px, 0); }
+  75% { transform: rotate(-25deg) translate3d(0, -4px, 0); }
+  87.5% { transform: rotate(-23.5deg) translate3d(0, -2px, 0); }
 }
 
 .held-item-bob {
-  animation: held-item-bob 0.45s ease-in-out infinite;
+  animation: held-item-bob 0.45s linear infinite;
+  backface-visibility: hidden;
 }

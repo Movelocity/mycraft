@@ -22,6 +22,7 @@ interface Props {
   getBreakTargetKey: () => string | null;
   onPlaceBlock: () => void;
   onBreakBlock: () => void;
+  onBreakProgressChange: (progress: number | null) => void;
 }
 
 // ── Break ring constants ──────────────────────────────────────────────────────
@@ -44,16 +45,19 @@ export default function MobileControls({
   getBreakTargetKey,
   onPlaceBlock,
   onBreakBlock,
+  onBreakProgressChange,
 }: Props) {
   const [breakRing, setBreakRing] = useState<BreakRing | null>(null);
 
   const handleBreakProgress = useCallback((progress: number, x: number, y: number) => {
     setBreakRing({ progress, x, y });
-  }, []);
+    onBreakProgressChange(progress);
+  }, [onBreakProgressChange]);
 
   const handleBreakCancel = useCallback(() => {
     setBreakRing(null);
-  }, []);
+    onBreakProgressChange(null);
+  }, [onBreakProgressChange]);
 
   const {
     onJoystickMove,

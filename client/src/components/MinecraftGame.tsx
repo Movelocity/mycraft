@@ -74,12 +74,16 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
   const [saveNotification, setSaveNotification] = useState<string | null>(null);
   const [isMoving, setIsMoving] = useState(false);
   const [isUnderwater, setIsUnderwater] = useState(false);
-  const [actionTrigger, setActionTrigger] = useState(0);
+  const [placeTrigger, setPlaceTrigger] = useState(0);
+  const [breakTrigger, setBreakTrigger] = useState(0);
+  const [breakProgress, setBreakProgress] = useState<number | null>(null);
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const movingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const underwaterRef = useRef(false);
-  const setActionTriggerRef = useRef(setActionTrigger);
-  setActionTriggerRef.current = setActionTrigger;
+  const setPlaceTriggerRef = useRef(setPlaceTrigger);
+  const setBreakTriggerRef = useRef(setBreakTrigger);
+  setPlaceTriggerRef.current = setPlaceTrigger;
+  setBreakTriggerRef.current = setBreakTrigger;
 
   const rebuildDirtyChunks = useCallback(() => {
     const g = gameRef.current;
@@ -219,7 +223,8 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
       setIsPaused,
       handleSave,
       scheduleAutoSave,
-      () => setActionTriggerRef.current(t => t + 1),
+      () => setPlaceTriggerRef.current(t => t + 1),
+      () => setBreakTriggerRef.current(t => t + 1),
     );
 
     // Prevent pinch-to-zoom on macOS trackpad (desktop only)
@@ -421,8 +426,9 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
         <HeldItem
           blockType={HOTBAR_BLOCKS[hotbarIndex]}
           isMoving={isMoving}
-          placeTrigger={actionTrigger}
-          breakTrigger={actionTrigger}
+          placeTrigger={placeTrigger}
+          breakTrigger={breakTrigger}
+          breakProgress={breakProgress}
         />
       )}
 
@@ -439,6 +445,7 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
           }}
           onPause={() => setIsPaused(true)}
           getBreakTargetKey={getBreakTargetKey}
+          onBreakProgressChange={setBreakProgress}
           onPlaceBlock={() => {
             const g = gameRef.current;
             if (!g) return;
@@ -452,7 +459,7 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
             g.chunkManager.setBlock(px, py, pz, blockType);
             g.changes.push([px, py, pz, blockType]);
             scheduleAutoSave();
-            setActionTrigger(t => t + 1);
+            setPlaceTrigger(t => t + 1);
           }}
           onBreakBlock={() => {
             const g = gameRef.current;
@@ -463,7 +470,6 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
             g.chunkManager.setBlock(bx, by, bz, 'air');
             g.changes.push([bx, by, bz, 'air']);
             scheduleAutoSave();
-            setActionTrigger(t => t + 1);
           }}
         />
       )}
@@ -718,7 +724,8 @@ function attachDesktopHandlers(
   setIsPaused: (v: boolean) => void,
   handleSave: () => void,
   scheduleAutoSave: () => void,
-  onAction: () => void,
+  onPlaceAction: () => void,
+  onBreakAction: () => void,
 ): () => void {
   const onKeyDown = (e: KeyboardEvent) => {
     const g = gameRef.current;
@@ -779,7 +786,7 @@ function attachDesktopHandlers(
       g.chunkManager.setBlock(bx, by, bz, 'air');
       g.changes.push([bx, by, bz, 'air']);
       scheduleAutoSave();
-      onAction();
+      onBreakAction();
     } else if (e.button === 2) {
       const px = target.blockPos.x + target.faceNormal.x;
       const py = target.blockPos.y + target.faceNormal.y;
@@ -789,7 +796,7 @@ function attachDesktopHandlers(
       g.chunkManager.setBlock(px, py, pz, blockType);
       g.changes.push([px, py, pz, blockType]);
       scheduleAutoSave();
-      onAction();
+      onPlaceAction();
     }
   };
 
