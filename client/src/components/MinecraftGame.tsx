@@ -179,7 +179,7 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
     const input: InputState = {
       forward: false, backward: false,
       left: false, right: false,
-      jump: false, sprint: false,
+      jump: false, sprint: false, sneak: false,
       fly: false, flyDown: false,
       joystickX: null, joystickY: null,
     };
@@ -565,8 +565,9 @@ function HelpOverlay({ onClose }: { onClose: () => void }) {
     ['Mouse', 'Look around'],
     ['Left Click', 'Break block'],
     ['Right Click', 'Place block'],
-    ['Space', 'Jump'],
-    ['Shift', 'Sprint'],
+    ['Space', 'Jump / Double-jump to fly'],
+    ['Shift', 'Sneak / Double-shift exit fly'],
+    ['Ctrl', 'Sprint'],
     ['F', 'Toggle fly mode'],
     ['1 – 9', 'Select block'],
     ['Scroll', 'Cycle hotbar'],
@@ -643,7 +644,8 @@ function attachDesktopHandlers(
       case 'KeyA': g.input.left = true; break;
       case 'KeyD': g.input.right = true; break;
       case 'Space': e.preventDefault(); g.input.jump = true; break;
-      case 'ShiftLeft': g.input.sprint = true; break;
+      case 'ShiftLeft': g.input.sneak = true; break;
+      case 'ControlLeft': g.input.sprint = true; break;
       case 'KeyF': g.playerState.flying = !g.playerState.flying; break;
       case 'Digit1': g.hotbarIndex = 0; setHotbarIndex(0); break;
       case 'Digit2': g.hotbarIndex = 1; setHotbarIndex(1); break;
@@ -668,7 +670,8 @@ function attachDesktopHandlers(
       case 'KeyA': g.input.left = false; break;
       case 'KeyD': g.input.right = false; break;
       case 'Space': g.input.jump = false; break;
-      case 'ShiftLeft': g.input.sprint = false; break;
+      case 'ShiftLeft': g.input.sneak = false; break;
+      case 'ControlLeft': g.input.sprint = false; break;
     }
   };
 

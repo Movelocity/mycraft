@@ -11,6 +11,9 @@ const SPRINT_MULTIPLIER = 1.6;
 const JUMP_VELOCITY = 8.0;
 const GRAVITY = -20.0;
 const PLAYER_RADIUS = 0.3;
+const JUMP_DOUBLE_TAP_WINDOW = 300; // ms for double-jump to fly
+const SNEAK_SPEED_MULTIPLIER = 0.5;
+const SNEAK_EYE_OFFSET = 0.3;
 
 export interface PlayerState {
   position: THREE.Vector3;
@@ -19,6 +22,10 @@ export interface PlayerState {
   pitch: number; // vertical rotation (radians)
   onGround: boolean;
   flying: boolean;
+  sneaking: boolean;
+  wasJumpPressed: boolean;
+  lastSneakTime: number;
+  wasSneakPressed: boolean;
 }
 
 export function createPlayerState(spawnX: number, spawnY: number, spawnZ: number): PlayerState {
@@ -29,6 +36,10 @@ export function createPlayerState(spawnX: number, spawnY: number, spawnZ: number
     pitch: 0,
     onGround: false,
     flying: false,
+    sneaking: false,
+    wasJumpPressed: false,
+    lastSneakTime: 0,
+    wasSneakPressed: false,
   };
 }
 
@@ -110,6 +121,29 @@ function checkCollisionXZ(manager: ChunkManager, pos: THREE.Vector3, dx: number,
   return { nx, nz };
 }
 
+function checkSneakEdge(manager: ChunkManager, pos: THREE.Vector3, dx: number, dz: number): boolean {
+  const newX = pos.x + dx;
+  const newZ = pos.z + dz;
+  const feetY = Math.floor(pos.y - PLAYER_HEIGHT);
+  const checkY = feetY - 1;
+
+  const corners = [
+    { x: newX - PLAYER_RADIUS, z: newZ - PLAYER_RADIUS },
+    { x: newX + PLAYER_RADIUS, z: newZ - PLAYER_RADIUS },
+    { x: newX - PLAYER_RADIUS, z: newZ + PLAYER_RADIUS },
+    { x: newX + PLAYER_RADIUS, z: newZ + PLAYER_RADIUS },
+  ];
+
+  for (const corner of corners) {
+    const bx = Math.floor(corner.x);
+    const bz = Math.floor(corner.z);
+    if (isSolid(manager, bx, checkY, bz)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export interface InputState {
   forward: boolean;
   backward: boolean;
@@ -117,6 +151,7 @@ export interface InputState {
   right: boolean;
   jump: boolean;
   sprint: boolean;
+  sneak: boolean;
   fly: boolean;
   flyDown: boolean;
   // Analog joystick override: range [-1, 1]; null = use boolean keys above
@@ -130,7 +165,37 @@ export function updatePlayer(
   manager: ChunkManager,
   dt: number
 ): void {
-  const speed = PLAYER_SPEED * (input.sprint ? SPRINT_MULTIPLIER : 1.0);
+  // Jump or enter flying
+  const jumpJustPressed = input.jump && !state.wasJumpPressed;
+  if (jumpJustPressed && !state.flying) {
+    if (state.onGround) {
+      // On ground: normal jump
+      state.velocity.y = JUMP_VELOCITY;
+      state.onGround = false;
+    } else {
+      // In air: enter flying mode
+      state.flying = true;
+      state.velocity.y = 0;
+    }
+  }
+  state.wasJumpPressed = input.jump;
+
+  // Double-shift to exit flying
+  const sneakJustPressed = input.sneak && !state.wasSneakPressed;
+  if (sneakJustPressed && state.flying) {
+    const now = performance.now();
+    if (now - state.lastSneakTime < JUMP_DOUBLE_TAP_WINDOW) {
+      state.flying = false;
+      state.lastSneakTime = 0;
+    } else {
+      state.lastSneakTime = now;
+    }
+  }
+  state.wasSneakPressed = input.sneak;
+
+  const speed = PLAYER_SPEED
+    * (input.sprint ? SPRINT_MULTIPLIER : 1.0)
+    * (state.sneaking ? SNEAK_SPEED_MULTIPLIER : 1.0);
 
   // Joystick analog input takes priority over boolean keys
   let moveX: number;
@@ -160,22 +225,35 @@ export function updatePlayer(
   const normalizedZ = moveLen > 0 ? (hasAnalog ? worldZ : worldZ / moveLen) : 0;
 
   if (state.flying) {
-    // Flying mode
+    // Flying mode: Space = up, Shift = down
     state.velocity.x = normalizedX * speed;
     state.velocity.z = normalizedZ * speed;
     state.velocity.y = 0;
     if (input.jump) state.velocity.y = speed;
-    if (input.flyDown) state.velocity.y = -speed;
+    if (input.sneak) state.velocity.y = -speed;
+    state.sneaking = false;
   } else {
-    // Normal physics
-    state.velocity.x = normalizedX * speed;
-    state.velocity.z = normalizedZ * speed;
+    // Normal mode
+    state.sneaking = input.sneak;
+
+    // Sneak edge protection
+    let dxMove = normalizedX * speed * dt;
+    let dzMove = normalizedZ * speed * dt;
+    if (state.sneaking && (dxMove !== 0 || dzMove !== 0)) {
+      if (!checkSneakEdge(manager, state.position, dxMove, dzMove)) {
+        dxMove = 0;
+        dzMove = 0;
+      }
+    }
+
+    state.velocity.x = dxMove / dt;
+    state.velocity.z = dzMove / dt;
 
     // Gravity
     state.velocity.y += GRAVITY * dt;
 
     // Jump
-    if (input.jump && state.onGround) {
+    if (jumpJustPressed && state.onGround) {
       state.velocity.y = JUMP_VELOCITY;
       state.onGround = false;
     }
@@ -207,6 +285,9 @@ export function updatePlayer(
 
 export function applyPlayerToCamera(state: PlayerState, camera: THREE.PerspectiveCamera): void {
   camera.position.copy(state.position);
+  if (state.sneaking) {
+    camera.position.y -= SNEAK_EYE_OFFSET;
+  }
   camera.rotation.order = 'YXZ';
   camera.rotation.y = state.yaw;
   camera.rotation.x = state.pitch;
