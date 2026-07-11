@@ -65,13 +65,68 @@ export function setBlock(world: WorldData, x: number, y: number, z: number, type
   }
 }
 
-function getTerrainHeight(x: number, z: number, seed: number): number {
-  const n = octaveNoise(x / 64, z / 64, seed, 4, 0.5);
-  return Math.floor(SEA_LEVEL + n * 20 - 4);
+type Biome = 'plains' | 'hills' | 'river' | 'forest';
+
+function getBiome(x: number, z: number, seed: number): Biome {
+  const biomeNoise = octaveNoise(x / 256, z / 256, seed + 31337, 2, 0.5);
+  const riverNoise = octaveNoise(x / 80, z / 80, seed + 55555, 3, 0.5);
+  const riverBand = Math.abs(riverNoise - 0.5);
+
+  if (riverBand < 0.018) return 'river';
+  if (biomeNoise < 0.35) return 'plains';
+  if (biomeNoise < 0.60) return 'hills';
+  if (biomeNoise < 0.72) return 'forest';
+  return 'hills';
 }
 
-function shouldPlaceTree(x: number, z: number, seed: number): boolean {
-  return hash(x, z, seed + 9999) > 0.93;
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
+function getRawTerrainHeight(biome: Biome, baseNoise: number, detailNoise: number): number {
+  switch (biome) {
+    case 'river':  return SEA_LEVEL - 2 - detailNoise * 2;
+    case 'plains': return SEA_LEVEL + 1 + baseNoise * 5 - 2 + detailNoise * 1.5;
+    case 'hills':  return SEA_LEVEL + baseNoise * 18 - 4 + detailNoise * 4;
+    case 'forest': return SEA_LEVEL + 2 + baseNoise * 10 - 2 + detailNoise * 2;
+    default:       return SEA_LEVEL + baseNoise * 14 - 3;
+  }
+}
+
+function getTerrainHeight(x: number, z: number, seed: number): number {
+  const baseNoise = octaveNoise(x / 96, z / 96, seed, 4, 0.5);
+  const detailNoise = octaveNoise(x / 32, z / 32, seed + 2000, 2, 0.4);
+  const riverNoise = octaveNoise(x / 80, z / 80, seed + 55555, 3, 0.5);
+  const riverBand = Math.abs(riverNoise - 0.5);
+
+  const RIVER_EDGE = 0.018;
+  const RIVER_SHORE = 0.08;
+
+  let height: number;
+  if (riverBand < RIVER_EDGE) {
+    height = SEA_LEVEL - 3 - detailNoise * 3;
+  } else if (riverBand < RIVER_SHORE) {
+    const biome = getBiome(x, z, seed);
+    const landHeight = getRawTerrainHeight(biome, baseNoise, detailNoise);
+    const riverHeight = SEA_LEVEL - 3 - detailNoise * 3;
+    const t = smoothstep(RIVER_EDGE, RIVER_SHORE, riverBand);
+    height = riverHeight + (landHeight - riverHeight) * t;
+  } else {
+    const biome = getBiome(x, z, seed);
+    height = getRawTerrainHeight(biome, baseNoise, detailNoise);
+  }
+  return Math.max(1, Math.min(WORLD_HEIGHT - 2, Math.floor(height)));
+}
+
+function shouldPlaceTree(x: number, z: number, seed: number, biome: Biome): boolean {
+  const r = hash(x, z, seed + 9999);
+  switch (biome) {
+    case 'forest': return r > 0.82;
+    case 'plains': return r > 0.97;
+    case 'hills':  return r > 0.95;
+    default:       return false;
+  }
 }
 
 function placeTree(world: WorldData, x: number, y: number, z: number): void {
@@ -105,7 +160,12 @@ export function generateWorld(seed: number = 42, radius: number = 24): WorldData
 
   for (let x = -radius; x <= radius; x++) {
     for (let z = -radius; z <= radius; z++) {
+      const biome = getBiome(x, z, seed);
       const terrainH = getTerrainHeight(x, z, seed);
+      const riverBand = Math.abs(
+        octaveNoise(x / 80, z / 80, seed + 55555, 3, 0.5) - 0.5,
+      );
+      const nearRiver = riverBand < 0.08;
 
       for (let y = 0; y <= terrainH; y++) {
         let blockType: BlockType;
@@ -113,7 +173,6 @@ export function generateWorld(seed: number = 42, radius: number = 24): WorldData
         if (y === 0) {
           blockType = 'bedrock';
         } else if (y < terrainH - 4) {
-          // Deep underground: ores
           const r = hash(x, y * 31 + z, seed + 777);
           if (r < 0.005) blockType = 'diamond_ore';
           else if (r < 0.015) blockType = 'gold_ore';
@@ -123,7 +182,7 @@ export function generateWorld(seed: number = 42, radius: number = 24): WorldData
         } else if (y < terrainH - 1) {
           blockType = 'dirt';
         } else if (y === terrainH) {
-          if (terrainH < SEA_LEVEL + 1) {
+          if (terrainH < SEA_LEVEL + 1 || nearRiver) {
             blockType = 'sand';
           } else {
             blockType = 'grass';
@@ -142,8 +201,8 @@ export function generateWorld(seed: number = 42, radius: number = 24): WorldData
         }
       }
 
-      // Trees on grass
-      if (terrainH >= SEA_LEVEL + 1 && shouldPlaceTree(x, z, seed)) {
+      // Trees (biome-aware)
+      if (terrainH >= SEA_LEVEL + 1 && shouldPlaceTree(x, z, seed, biome)) {
         placeTree(world, x, terrainH + 1, z);
       }
     }

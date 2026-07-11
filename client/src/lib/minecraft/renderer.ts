@@ -332,6 +332,7 @@ export function createScene(canvas: HTMLCanvasElement): {
   renderer: THREE.WebGLRenderer;
 } {
   const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x87CEEB);
   scene.fog = new THREE.Fog(0x87CEEB, 50, 130);
 
   const camera = new THREE.PerspectiveCamera(75, canvas.clientWidth / canvas.clientHeight, 0.05, 500);

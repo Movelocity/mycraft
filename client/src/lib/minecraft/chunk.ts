@@ -78,13 +78,78 @@ function octaveNoise(x: number, z: number, seed: number, octaves: number, persis
   return value / maxValue;
 }
 
-function getTerrainHeight(x: number, z: number, seed: number): number {
-  const n = octaveNoise(x / 64, z / 64, seed, 4, 0.5);
-  return Math.floor(SEA_LEVEL + n * 20 - 4);
+type Biome = 'plains' | 'hills' | 'river' | 'forest';
+
+function getBiome(x: number, z: number, seed: number): Biome {
+  const biomeNoise = octaveNoise(x / 256, z / 256, seed + 31337, 2, 0.5);
+  const riverNoise = octaveNoise(x / 80, z / 80, seed + 55555, 3, 0.5);
+  const riverBand = Math.abs(riverNoise - 0.5);
+
+  if (riverBand < 0.018) return 'river';
+  if (biomeNoise < 0.35) return 'plains';
+  if (biomeNoise < 0.60) return 'hills';
+  if (biomeNoise < 0.72) return 'forest';
+  return 'hills';
 }
 
-function shouldPlaceTree(x: number, z: number, seed: number): boolean {
-  return hash(x, z, seed + 9999) > 0.93;
+// 平滑阶梯函数 smoothstep
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
+function getRawTerrainHeight(biome: Biome, baseNoise: number, detailNoise: number): number {
+  switch (biome) {
+    case 'river':
+      return SEA_LEVEL - 2 - detailNoise * 2;
+    case 'plains':
+      return SEA_LEVEL + 1 + baseNoise * 5 - 2 + detailNoise * 1.5;
+    case 'hills':
+      return SEA_LEVEL + baseNoise * 18 - 4 + detailNoise * 4;
+    case 'forest':
+      return SEA_LEVEL + 2 + baseNoise * 10 - 2 + detailNoise * 2;
+    default:
+      return SEA_LEVEL + baseNoise * 14 - 3;
+  }
+}
+
+function getTerrainHeight(x: number, z: number, seed: number): number {
+  const baseNoise = octaveNoise(x / 96, z / 96, seed, 4, 0.5);
+  const detailNoise = octaveNoise(x / 32, z / 32, seed + 2000, 2, 0.4);
+
+  const riverNoise = octaveNoise(x / 80, z / 80, seed + 55555, 3, 0.5);
+  const riverBand = Math.abs(riverNoise - 0.5);
+
+  const RIVER_EDGE = 0.018;
+  const RIVER_SHORE = 0.08;
+
+  let height: number;
+
+  if (riverBand < RIVER_EDGE) {
+    height = SEA_LEVEL - 3 - detailNoise * 3;
+  } else if (riverBand < RIVER_SHORE) {
+    const biome = getBiome(x, z, seed);
+    const landHeight = getRawTerrainHeight(biome, baseNoise, detailNoise);
+    const riverHeight = SEA_LEVEL - 3 - detailNoise * 3;
+    const t = smoothstep(RIVER_EDGE, RIVER_SHORE, riverBand);
+    // 纯线性插值；landHeight 可能低于海平面，钳制公式在该情形下单调性错误
+    height = riverHeight + (landHeight - riverHeight) * t;
+  } else {
+    const biome = getBiome(x, z, seed);
+    height = getRawTerrainHeight(biome, baseNoise, detailNoise);
+  }
+
+  return Math.max(1, Math.min(WORLD_HEIGHT - 2, Math.floor(height)));
+}
+
+function shouldPlaceTree(x: number, z: number, seed: number, biome: Biome): boolean {
+  const r = hash(x, z, seed + 9999);
+  switch (biome) {
+    case 'forest': return r > 0.82;  // ~18% — 森林茂密
+    case 'plains': return r > 0.97;  // ~3%  — 平原偶有孤树
+    case 'hills':  return r > 0.95;  // ~5%  — 山丘少量树
+    default:       return false;
+  }
 }
 
 // ── 区块生成 ──
@@ -97,7 +162,12 @@ export function generateChunk(chunkX: number, chunkZ: number, seed: number): Chu
     for (let localZ = 0; localZ < CHUNK_SIZE; localZ++) {
       const worldX = startX + localX;
       const worldZ = startZ + localZ;
+      const biome = getBiome(worldX, worldZ, seed);
       const terrainH = getTerrainHeight(worldX, worldZ, seed);
+      const riverBand = Math.abs(
+        octaveNoise(worldX / 80, worldZ / 80, seed + 55555, 3, 0.5) - 0.5,
+      );
+      const nearRiver = riverBand < 0.08;
 
       for (let y = 0; y <= terrainH; y++) {
         let blockType: BlockType;
@@ -114,7 +184,11 @@ export function generateChunk(chunkX: number, chunkZ: number, seed: number): Chu
         } else if (y < terrainH - 1) {
           blockType = 'dirt';
         } else if (y === terrainH) {
-          blockType = terrainH < SEA_LEVEL + 1 ? 'sand' : 'grass';
+          if (terrainH < SEA_LEVEL + 1 || nearRiver) {
+            blockType = 'sand';
+          } else {
+            blockType = 'grass';
+          }
         } else {
           blockType = 'dirt';
         }
@@ -129,8 +203,8 @@ export function generateChunk(chunkX: number, chunkZ: number, seed: number): Chu
         }
       }
 
-      // Trees (deterministic)
-      if (terrainH >= SEA_LEVEL + 1 && shouldPlaceTree(worldX, worldZ, seed)) {
+      // Trees (deterministic, biome-aware)
+      if (terrainH >= SEA_LEVEL + 1 && shouldPlaceTree(worldX, worldZ, seed, biome)) {
         placeTree(blocks, localX, terrainH + 1, localZ);
       }
     }
@@ -196,7 +270,13 @@ export class ChunkManager {
     if (y < 0 || y >= WORLD_HEIGHT) return 'air';
     const [chunkX, chunkZ] = worldToChunk(x, z);
     const chunk = this.getChunk(chunkX, chunkZ);
-    if (!chunk) return 'air';
+    if (!chunk) {
+      // 邻居区块未加载时，用地形函数推算，防止水/实体方块侧面暴露
+      const h = getTerrainHeight(x, z, this.seed);
+      if (y <= h) return 'stone';
+      if (y <= SEA_LEVEL) return 'water';
+      return 'air';
+    }
     const [lx, ly, lz] = worldToLocal(x, y, z);
     return chunk.blocks.get(blockKey(lx, ly, lz)) ?? 'air';
   }
