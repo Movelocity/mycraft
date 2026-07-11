@@ -230,7 +230,7 @@ export function updatePlayer(
     state.velocity.z = normalizedZ * flySpeed;
     state.velocity.y = 0;
     if (input.jump) state.velocity.y = flySpeed;
-    if (input.sneak) state.velocity.y = -flySpeed;
+    if (input.sneak || input.flyDown) state.velocity.y = -flySpeed;
     state.sneaking = false;
   } else {
     // Normal mode

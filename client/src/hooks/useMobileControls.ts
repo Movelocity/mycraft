@@ -4,7 +4,7 @@ import { InputState } from '@/lib/minecraft/player';
 const TOUCH_SENS = 0.005;
 const TAP_MAX_MS = 300;
 const TAP_MAX_MOVE_PX = 10;
-const BREAK_DURATION_MS = 350; // time to fill the ring and break
+const BREAK_DURATION_MS = 300; // time to fill the ring and break
 
 interface TouchState {
   id: number;

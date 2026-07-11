@@ -156,7 +156,7 @@ function BreakProgressRing({ progress, x, y }: { progress: number; x: number; y:
       style={{
         position: 'fixed',
         left: x - RING_SIZE / 2,
-        top: y - RING_SIZE * 0.7,
+        top: y - RING_SIZE * 0.6,
         width: RING_SIZE,
         height: RING_SIZE,
         pointerEvents: 'none',
