@@ -118,6 +118,10 @@ export interface InputState {
   jump: boolean;
   sprint: boolean;
   fly: boolean;
+  flyDown: boolean;
+  // Analog joystick override: range [-1, 1]; null = use boolean keys above
+  joystickX: number | null;
+  joystickY: number | null;
 }
 
 export function updatePlayer(
@@ -128,13 +132,20 @@ export function updatePlayer(
 ): void {
   const speed = PLAYER_SPEED * (input.sprint ? SPRINT_MULTIPLIER : 1.0);
 
-  // Movement direction in camera space (forward = -Z, right = +X)
-  let moveX = 0;
-  let moveZ = 0;
-  if (input.forward) moveZ -= 1;
-  if (input.backward) moveZ += 1;
-  if (input.left) moveX -= 1;
-  if (input.right) moveX += 1;
+  // Joystick analog input takes priority over boolean keys
+  let moveX: number;
+  let moveZ: number;
+  if (input.joystickX !== null && input.joystickY !== null) {
+    moveX = input.joystickX;
+    moveZ = input.joystickY;
+  } else {
+    moveX = 0;
+    moveZ = 0;
+    if (input.forward) moveZ -= 1;
+    if (input.backward) moveZ += 1;
+    if (input.left) moveX -= 1;
+    if (input.right) moveX += 1;
+  }
 
   // Rotate movement by yaw to world space
   const cos = Math.cos(state.yaw);
@@ -142,10 +153,11 @@ export function updatePlayer(
   const worldX = moveX * cos + moveZ * sin;
   const worldZ = -moveX * sin + moveZ * cos;
 
-  // Normalize if moving
+  // Normalize only boolean input; joystick already provides magnitude
   const moveLen = Math.sqrt(worldX * worldX + worldZ * worldZ);
-  const normalizedX = moveLen > 0 ? worldX / moveLen : 0;
-  const normalizedZ = moveLen > 0 ? worldZ / moveLen : 0;
+  const hasAnalog = input.joystickX !== null;
+  const normalizedX = moveLen > 0 ? (hasAnalog ? worldX : worldX / moveLen) : 0;
+  const normalizedZ = moveLen > 0 ? (hasAnalog ? worldZ : worldZ / moveLen) : 0;
 
   if (state.flying) {
     // Flying mode
@@ -153,7 +165,7 @@ export function updatePlayer(
     state.velocity.z = normalizedZ * speed;
     state.velocity.y = 0;
     if (input.jump) state.velocity.y = speed;
-    if (input.fly) state.velocity.y = -speed;
+    if (input.flyDown) state.velocity.y = -speed;
   } else {
     // Normal physics
     state.velocity.x = normalizedX * speed;

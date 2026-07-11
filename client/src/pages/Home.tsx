@@ -2,24 +2,42 @@
 import { useState, useEffect } from 'react';
 import MinecraftGame, { type GameInitData } from '@/components/MinecraftGame';
 import { listSaves, loadGame, type SaveInfo } from '@/lib/minecraft/save';
+import { isMobileUA, enterFullscreen, isLandscape } from '@/utils/mobile';
 
 export default function Home() {
-  const [gameData, setGameData] = useState<{ data: GameInitData; slot: number } | null>(null);
+  const [gameData, setGameData] = useState<{ data: GameInitData; slot: number; mobile: boolean } | null>(null);
   const [saves, setSaves] = useState<SaveInfo[]>([]);
+  const [showRotateHint, setShowRotateHint] = useState(false);
+  const isMobile = isMobileUA();
 
   useEffect(() => {
     listSaves().then(setSaves);
   }, []);
 
-  const handleSelectSlot = async (slot: number) => {
+  useEffect(() => {
+    if (!gameData?.mobile) return;
+    const check = () => setShowRotateHint(!isLandscape());
+    check();
+    window.addEventListener('resize', check);
+    window.addEventListener('orientationchange', check);
+    return () => {
+      window.removeEventListener('resize', check);
+      window.removeEventListener('orientationchange', check);
+    };
+  }, [gameData?.mobile]);
+
+  const handleSelectSlot = async (slot: number, mobile = false) => {
+    if (mobile) {
+      await enterFullscreen().catch(() => {});
+    }
     const saveData = await loadGame(slot);
     if (saveData) {
       const { restoreFromSave } = await import('@/lib/minecraft/save');
       const restored = restoreFromSave(saveData);
-      setGameData({ data: restored, slot });
+      setGameData({ data: restored, slot, mobile });
     } else {
       const seed = Math.floor(Math.random() * 99999);
-      setGameData({ data: { seed, radius: 30 }, slot });
+      setGameData({ data: { seed, radius: 30 }, slot, mobile });
     }
   };
 
@@ -29,7 +47,29 @@ export default function Home() {
   };
 
   if (gameData) {
-    return <MinecraftGame loadData={gameData.data} slot={gameData.slot} onExit={handleBackToMenu} />;
+    return (
+      <>
+        <MinecraftGame
+          loadData={gameData.data}
+          slot={gameData.slot}
+          onExit={handleBackToMenu}
+          mobileMode={gameData.mobile}
+        />
+        {showRotateHint && (
+          <div style={{
+            position: 'fixed', inset: 0, zIndex: 9999,
+            background: 'rgba(0,0,0,0.88)',
+            display: 'flex', flexDirection: 'column',
+            alignItems: 'center', justifyContent: 'center',
+            color: '#fff', fontFamily: "'Press Start 2P', monospace",
+            fontSize: 10, textAlign: 'center', gap: 16,
+          }}>
+            <div style={{ fontSize: 48 }}>↻</div>
+            <div>请将设备旋转至横屏</div>
+          </div>
+        )}
+      </>
+    );
   }
 
   return (
@@ -71,7 +111,7 @@ export default function Home() {
         {saves.map((save) => (
           <button
             key={save.slot}
-            onClick={() => handleSelectSlot(save.slot)}
+            onClick={() => handleSelectSlot(save.slot, isMobile)}
             style={{
               background: save.timestamp > 0 ? '#5D8A3C' : '#444',
               border: '3px solid #000',
@@ -105,8 +145,17 @@ export default function Home() {
         color: '#fff', fontSize: 'clamp(6px, 1.6vw, 8px)', textShadow: '1px 1px 0 #000',
         textAlign: 'center', lineHeight: '2.2', padding: '0 16px',
       }}>
-        <div>Left Click = Break  ·  Right Click = Place</div>
-        <div>WASD = Move  ·  Space = Jump  ·  F = Fly</div>
+        {isMobile ? (
+          <>
+            <div>轻触右侧 = 放置方块 · 长按右侧 = 破坏</div>
+            <div>左摇杆移动 · 右滑视角 · 跳跃按钮</div>
+          </>
+        ) : (
+          <>
+            <div>Left Click = Break  ·  Right Click = Place</div>
+            <div>WASD = Move  ·  Space = Jump  ·  F = Fly</div>
+          </>
+        )}
       </div>
 
       {/* Version */}

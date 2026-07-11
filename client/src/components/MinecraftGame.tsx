@@ -2,7 +2,7 @@
 // Design: Authentic Minecraft aesthetic — full-screen 3D canvas with HUD overlay
 // Style: Pixel-perfect Minecraft UI, Press Start 2P font, earthy palette
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { BLOCKS, HOTBAR_BLOCKS, type BlockType } from '@/lib/minecraft/blocks';
 import { ChunkManager, RENDER_DISTANCE } from '@/lib/minecraft/chunk';
@@ -20,6 +20,8 @@ import {
   getTargetBlock,
   InputState,
 } from '@/lib/minecraft/player';
+import MobileControls from '@/components/mobile/MobileControls';
+import { isMobileUA } from '@/utils/mobile';
 
 export interface GameInitData {
   seed: number;
@@ -38,9 +40,11 @@ interface MinecraftGameProps {
   loadData?: GameInitData;
   slot?: number;
   onExit?: () => void;
+  mobileMode?: boolean;
 }
 
-export default function MinecraftGame({ loadData, slot, onExit }: MinecraftGameProps = {}) {
+export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: MinecraftGameProps = {}) {
+  const isMobile = mobileMode ?? isMobileUA();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const gameRef = useRef<{
     scene: THREE.Scene;
@@ -62,7 +66,8 @@ export default function MinecraftGame({ loadData, slot, onExit }: MinecraftGameP
   const [hotbarIndex, setHotbarIndex] = useState(loadData?.hotbarIndex ?? 0);
   const [debugInfo, setDebugInfo] = useState({ x: 0, y: 0, z: 0, fps: 0, flying: false, targetBlock: 'air', chunks: 0 });
   const [showHelp, setShowHelp] = useState(false);
-  const [isLocked, setIsLocked] = useState(false);
+  // Desktop: paused when pointer is not locked; Mobile: paused via explicit button
+  const [isPaused, setIsPaused] = useState(!isMobile);
   const [hearts] = useState(10);
   const [saveNotification, setSaveNotification] = useState<string | null>(null);
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -174,7 +179,9 @@ export default function MinecraftGame({ loadData, slot, onExit }: MinecraftGameP
     const input: InputState = {
       forward: false, backward: false,
       left: false, right: false,
-      jump: false, sprint: false, fly: false,
+      jump: false, sprint: false,
+      fly: false, flyDown: false,
+      joystickX: null, joystickY: null,
     };
 
     gameRef.current = {
@@ -185,112 +192,28 @@ export default function MinecraftGame({ loadData, slot, onExit }: MinecraftGameP
       seed: worldSeed, radius: worldRadius, changes,
     };
 
-    const onKeyDown = (e: KeyboardEvent) => {
-      const g = gameRef.current;
-      if (!g) return;
-      switch (e.code) {
-        case 'KeyW': g.input.forward = true; break;
-        case 'KeyS': g.input.backward = true; break;
-        case 'KeyA': g.input.left = true; break;
-        case 'KeyD': g.input.right = true; break;
-        case 'Space': e.preventDefault(); g.input.jump = true; break;
-        case 'ShiftLeft': g.input.sprint = true; break;
-        case 'KeyF':
-          g.playerState.flying = !g.playerState.flying;
-          break;
-        case 'Digit1': g.hotbarIndex = 0; setHotbarIndex(0); break;
-        case 'Digit2': g.hotbarIndex = 1; setHotbarIndex(1); break;
-        case 'Digit3': g.hotbarIndex = 2; setHotbarIndex(2); break;
-        case 'Digit4': g.hotbarIndex = 3; setHotbarIndex(3); break;
-        case 'Digit5': g.hotbarIndex = 4; setHotbarIndex(4); break;
-        case 'Digit6': g.hotbarIndex = 5; setHotbarIndex(5); break;
-        case 'Digit7': g.hotbarIndex = 6; setHotbarIndex(6); break;
-        case 'Digit8': g.hotbarIndex = 7; setHotbarIndex(7); break;
-        case 'Digit9': g.hotbarIndex = 8; setHotbarIndex(8); break;
-        case 'KeyH': setShowHelp(h => !h); break;
-        case 'F5':
-          e.preventDefault();
-          handleSave();
-          break;
-      }
-    };
+    // ── Desktop-only input handlers ───────────────────────────────────────────
+    const cleanupDesktop = isMobile ? () => {} : attachDesktopHandlers(
+      canvas,
+      gameRef,
+      setHotbarIndex,
+      setShowHelp,
+      setIsPaused,
+      handleSave,
+      scheduleAutoSave,
+    );
 
-    const onKeyUp = (e: KeyboardEvent) => {
-      const g = gameRef.current;
-      if (!g) return;
-      switch (e.code) {
-        case 'KeyW': g.input.forward = false; break;
-        case 'KeyS': g.input.backward = false; break;
-        case 'KeyA': g.input.left = false; break;
-        case 'KeyD': g.input.right = false; break;
-        case 'Space': g.input.jump = false; break;
-        case 'ShiftLeft': g.input.sprint = false; break;
-      }
-    };
-
-    const onMouseMove = (e: MouseEvent) => {
-      const g = gameRef.current;
-      if (!g || !g.locked) return;
-      const sens = 0.002;
-      g.playerState.yaw -= e.movementX * sens;
-      g.playerState.pitch -= e.movementY * sens;
-      g.playerState.pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, g.playerState.pitch));
-    };
-
-    const onMouseDown = (e: MouseEvent) => {
-      const g = gameRef.current;
-      if (!g || !g.locked) return;
-      const target = getTargetBlock(g.camera, g.chunkManager);
-      if (!target?.hit) return;
-      if (e.button === 0) {
-        const bx = target.blockPos.x, by = target.blockPos.y, bz = target.blockPos.z;
-        g.chunkManager.setBlock(bx, by, bz, 'air');
-        g.changes.push([bx, by, bz, 'air']);
-        scheduleAutoSave();
-      } else if (e.button === 2) {
-        const px = target.blockPos.x + target.faceNormal.x;
-        const py = target.blockPos.y + target.faceNormal.y;
-        const pz = target.blockPos.z + target.faceNormal.z;
-        const blockType = HOTBAR_BLOCKS[g.hotbarIndex];
-        g.chunkManager.setBlock(px, py, pz, blockType);
-        g.changes.push([px, py, pz, blockType]);
-        scheduleAutoSave();
-      }
-    };
-
-    const onWheel = (e: WheelEvent) => {
-      const g = gameRef.current;
-      if (!g) return;
-      const d = e.deltaY > 0 ? 1 : -1;
-      g.hotbarIndex = (g.hotbarIndex + d + HOTBAR_BLOCKS.length) % HOTBAR_BLOCKS.length;
-      setHotbarIndex(g.hotbarIndex);
-    };
-
-    const onPointerLockChange = () => {
-      const g = gameRef.current;
-      const locked = document.pointerLockElement === canvas;
-      if (g) g.locked = locked;
-      setIsLocked(locked);
-    };
-
-    document.addEventListener('keydown', onKeyDown);
-    document.addEventListener('keyup', onKeyUp);
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mousedown', onMouseDown);
-    document.addEventListener('wheel', onWheel, { passive: true });
-    document.addEventListener('pointerlockchange', onPointerLockChange);
-    canvas.addEventListener('click', () => { if (!gameRef.current?.locked) canvas.requestPointerLock(); });
-    canvas.addEventListener('contextmenu', e => e.preventDefault());
-
-    // Prevent pinch-to-zoom on macOS trackpad
+    // Prevent pinch-to-zoom on macOS trackpad (desktop only)
     const preventZoom = (e: Event) => { e.preventDefault(); };
     const preventWheelZoom = (e: WheelEvent) => {
       if (e.ctrlKey) { e.preventDefault(); }
     };
-    document.addEventListener('gesturestart', preventZoom, { passive: false });
-    document.addEventListener('gesturechange', preventZoom, { passive: false });
-    document.addEventListener('gestureend', preventZoom, { passive: false });
-    document.addEventListener('wheel', preventWheelZoom, { passive: false });
+    if (!isMobile) {
+      document.addEventListener('gesturestart', preventZoom, { passive: false });
+      document.addEventListener('gesturechange', preventZoom, { passive: false });
+      document.addEventListener('gestureend', preventZoom, { passive: false });
+      document.addEventListener('wheel', preventWheelZoom, { passive: false });
+    }
 
     const onResize = () => {
       const g = gameRef.current;
@@ -354,16 +277,13 @@ export default function MinecraftGame({ loadData, slot, onExit }: MinecraftGameP
     gameRef.current.animFrame = requestAnimationFrame(gameLoop);
 
     return () => {
-      document.removeEventListener('keydown', onKeyDown);
-      document.removeEventListener('keyup', onKeyUp);
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mousedown', onMouseDown);
-      document.removeEventListener('wheel', onWheel);
-      document.removeEventListener('pointerlockchange', onPointerLockChange);
-      document.removeEventListener('gesturestart', preventZoom);
-      document.removeEventListener('gesturechange', preventZoom);
-      document.removeEventListener('gestureend', preventZoom);
-      document.removeEventListener('wheel', preventWheelZoom);
+      cleanupDesktop();
+      if (!isMobile) {
+        document.removeEventListener('gesturestart', preventZoom);
+        document.removeEventListener('gesturechange', preventZoom);
+        document.removeEventListener('gestureend', preventZoom);
+        document.removeEventListener('wheel', preventWheelZoom);
+      }
       window.removeEventListener('resize', onResize);
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
       if (gameRef.current) {
@@ -371,7 +291,7 @@ export default function MinecraftGame({ loadData, slot, onExit }: MinecraftGameP
         gameRef.current.renderer.dispose();
       }
     };
-  }, [rebuildDirtyChunks, loadData, handleSave, scheduleAutoSave]);
+  }, [rebuildDirtyChunks, loadData, handleSave, scheduleAutoSave, isMobile]);
 
   useEffect(() => {
     return initGame();
@@ -423,11 +343,49 @@ export default function MinecraftGame({ loadData, slot, onExit }: MinecraftGameP
         ))}
       </div>
 
-      {/* Hotbar */}
-      <HotbarHUD hotbarIndex={hotbarIndex} />
+      {/* Hotbar — hidden on mobile (rendered inside MobileControls) */}
+      {!isMobile && <HotbarHUD hotbarIndex={hotbarIndex} />}
+
+      {/* Mobile controls overlay */}
+      {isMobile && (
+        <MobileControls
+          gameRef={gameRef}
+          isPaused={isPaused}
+          flying={debugInfo.flying}
+          hotbarIndex={hotbarIndex}
+          onHotbarChange={(i) => {
+            setHotbarIndex(i);
+            if (gameRef.current) gameRef.current.hotbarIndex = i;
+          }}
+          onPause={() => setIsPaused(true)}
+          onPlaceBlock={() => {
+            const g = gameRef.current;
+            if (!g) return;
+            const target = getTargetBlock(g.camera, g.chunkManager);
+            if (!target?.hit) return;
+            const px = target.blockPos.x + target.faceNormal.x;
+            const py = target.blockPos.y + target.faceNormal.y;
+            const pz = target.blockPos.z + target.faceNormal.z;
+            const blockType = HOTBAR_BLOCKS[g.hotbarIndex];
+            g.chunkManager.setBlock(px, py, pz, blockType);
+            g.changes.push([px, py, pz, blockType]);
+            scheduleAutoSave();
+          }}
+          onBreakBlock={() => {
+            const g = gameRef.current;
+            if (!g) return;
+            const target = getTargetBlock(g.camera, g.chunkManager);
+            if (!target?.hit) return;
+            const { x: bx, y: by, z: bz } = target.blockPos;
+            g.chunkManager.setBlock(bx, by, bz, 'air');
+            g.changes.push([bx, by, bz, 'air']);
+            scheduleAutoSave();
+          }}
+        />
+      )}
 
       {/* Pause menu overlay */}
-      {!isLocked && (
+      {isPaused && (
         <div className="absolute inset-0 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.5)' }}>
           <div style={{
             background: '#1c1c1c',
@@ -445,7 +403,13 @@ export default function MinecraftGame({ loadData, slot, onExit }: MinecraftGameP
             <div style={{ fontSize: 'clamp(11px, 2.8vw, 14px)', color: '#FCFC00', marginBottom: '20px' }}>PAUSED</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               <button
-                onClick={() => canvasRef.current?.requestPointerLock()}
+                onClick={() => {
+                  if (isMobile) {
+                    setIsPaused(false);
+                  } else {
+                    canvasRef.current?.requestPointerLock();
+                  }
+                }}
                 style={{
                   background: '#5D8A3C',
                   border: '3px solid #000',
@@ -651,4 +615,130 @@ function HelpOverlay({ onClose }: { onClose: () => void }) {
   );
 }
 
+// ── Desktop input handler (extracted to keep initGame clean) ──────────────────
 
+function attachDesktopHandlers(
+  canvas: HTMLCanvasElement,
+  gameRef: React.MutableRefObject<{
+    input: InputState;
+    playerState: ReturnType<typeof createPlayerState>;
+    hotbarIndex: number;
+    locked: boolean;
+    chunkManager: ChunkManager;
+    camera: THREE.PerspectiveCamera;
+    changes: [number, number, number, BlockType][];
+  } | null>,
+  setHotbarIndex: (i: number) => void,
+  setShowHelp: (fn: (v: boolean) => boolean) => void,
+  setIsPaused: (v: boolean) => void,
+  handleSave: () => void,
+  scheduleAutoSave: () => void,
+): () => void {
+  const onKeyDown = (e: KeyboardEvent) => {
+    const g = gameRef.current;
+    if (!g) return;
+    switch (e.code) {
+      case 'KeyW': g.input.forward = true; break;
+      case 'KeyS': g.input.backward = true; break;
+      case 'KeyA': g.input.left = true; break;
+      case 'KeyD': g.input.right = true; break;
+      case 'Space': e.preventDefault(); g.input.jump = true; break;
+      case 'ShiftLeft': g.input.sprint = true; break;
+      case 'KeyF': g.playerState.flying = !g.playerState.flying; break;
+      case 'Digit1': g.hotbarIndex = 0; setHotbarIndex(0); break;
+      case 'Digit2': g.hotbarIndex = 1; setHotbarIndex(1); break;
+      case 'Digit3': g.hotbarIndex = 2; setHotbarIndex(2); break;
+      case 'Digit4': g.hotbarIndex = 3; setHotbarIndex(3); break;
+      case 'Digit5': g.hotbarIndex = 4; setHotbarIndex(4); break;
+      case 'Digit6': g.hotbarIndex = 5; setHotbarIndex(5); break;
+      case 'Digit7': g.hotbarIndex = 6; setHotbarIndex(6); break;
+      case 'Digit8': g.hotbarIndex = 7; setHotbarIndex(7); break;
+      case 'Digit9': g.hotbarIndex = 8; setHotbarIndex(8); break;
+      case 'KeyH': setShowHelp(h => !h); break;
+      case 'F5': e.preventDefault(); handleSave(); break;
+    }
+  };
+
+  const onKeyUp = (e: KeyboardEvent) => {
+    const g = gameRef.current;
+    if (!g) return;
+    switch (e.code) {
+      case 'KeyW': g.input.forward = false; break;
+      case 'KeyS': g.input.backward = false; break;
+      case 'KeyA': g.input.left = false; break;
+      case 'KeyD': g.input.right = false; break;
+      case 'Space': g.input.jump = false; break;
+      case 'ShiftLeft': g.input.sprint = false; break;
+    }
+  };
+
+  const onMouseMove = (e: MouseEvent) => {
+    const g = gameRef.current;
+    if (!g || !g.locked) return;
+    const sens = 0.002;
+    g.playerState.yaw -= e.movementX * sens;
+    g.playerState.pitch -= e.movementY * sens;
+    g.playerState.pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, g.playerState.pitch));
+  };
+
+  const onMouseDown = (e: MouseEvent) => {
+    const g = gameRef.current;
+    if (!g || !g.locked) return;
+    const target = getTargetBlock(g.camera, g.chunkManager);
+    if (!target?.hit) return;
+    if (e.button === 0) {
+      const { x: bx, y: by, z: bz } = target.blockPos;
+      g.chunkManager.setBlock(bx, by, bz, 'air');
+      g.changes.push([bx, by, bz, 'air']);
+      scheduleAutoSave();
+    } else if (e.button === 2) {
+      const px = target.blockPos.x + target.faceNormal.x;
+      const py = target.blockPos.y + target.faceNormal.y;
+      const pz = target.blockPos.z + target.faceNormal.z;
+      const blockType = HOTBAR_BLOCKS[g.hotbarIndex];
+      g.chunkManager.setBlock(px, py, pz, blockType);
+      g.changes.push([px, py, pz, blockType]);
+      scheduleAutoSave();
+    }
+  };
+
+  const onWheel = (e: WheelEvent) => {
+    const g = gameRef.current;
+    if (!g) return;
+    const d = e.deltaY > 0 ? 1 : -1;
+    g.hotbarIndex = (g.hotbarIndex + d + HOTBAR_BLOCKS.length) % HOTBAR_BLOCKS.length;
+    setHotbarIndex(g.hotbarIndex);
+  };
+
+  const onPointerLockChange = () => {
+    const g = gameRef.current;
+    const locked = document.pointerLockElement === canvas;
+    if (g) g.locked = locked;
+    setIsPaused(!locked);
+  };
+
+  const onCanvasClick = () => {
+    if (!gameRef.current?.locked) canvas.requestPointerLock();
+  };
+  const onContextMenu = (e: Event) => e.preventDefault();
+
+  document.addEventListener('keydown', onKeyDown);
+  document.addEventListener('keyup', onKeyUp);
+  document.addEventListener('mousemove', onMouseMove);
+  document.addEventListener('mousedown', onMouseDown);
+  document.addEventListener('wheel', onWheel, { passive: true });
+  document.addEventListener('pointerlockchange', onPointerLockChange);
+  canvas.addEventListener('click', onCanvasClick);
+  canvas.addEventListener('contextmenu', onContextMenu);
+
+  return () => {
+    document.removeEventListener('keydown', onKeyDown);
+    document.removeEventListener('keyup', onKeyUp);
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mousedown', onMouseDown);
+    document.removeEventListener('wheel', onWheel);
+    document.removeEventListener('pointerlockchange', onPointerLockChange);
+    canvas.removeEventListener('click', onCanvasClick);
+    canvas.removeEventListener('contextmenu', onContextMenu);
+  };
+}
