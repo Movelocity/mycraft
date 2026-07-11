@@ -11,14 +11,14 @@ interface Props {
   onToggleFly: () => void;
 }
 
-const BTN_SIZE = 52;
+const BTN_SIZE = 68;
 const BTN_STYLE: React.CSSProperties = {
   width: BTN_SIZE,
   height: BTN_SIZE,
   background: 'rgba(255,255,255,0.18)',
   border: '2px solid rgba(255,255,255,0.45)',
   color: '#fff',
-  fontSize: 20,
+  fontSize: 26,
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
@@ -80,7 +80,7 @@ export default function JumpButton({
       <div
         style={{
           position: 'absolute',
-          right: 20,
+          right: 88,
           bottom: 80,
           display: 'flex',
           flexDirection: 'column',
@@ -99,7 +99,7 @@ export default function JumpButton({
     <div
       style={{
         position: 'absolute',
-        right: 20,
+        right: 88,
         bottom: 80,
         pointerEvents: 'auto',
       }}

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useCallback } from 'react';
 import FloatingJoystick from './FloatingJoystick';
 import JumpButton from './JumpButton';
 import { useMobileControls } from '@/hooks/useMobileControls';
@@ -23,6 +23,16 @@ interface Props {
   onBreakBlock: () => void;
 }
 
+// ── Break ring constants ──────────────────────────────────────────────────────
+const RING_R = 56;
+const RING_SIZE = (RING_R + 6) * 2;
+
+interface BreakRing {
+  progress: number;
+  x: number;
+  y: number;
+}
+
 export default function MobileControls({
   gameRef,
   isPaused,
@@ -33,6 +43,16 @@ export default function MobileControls({
   onPlaceBlock,
   onBreakBlock,
 }: Props) {
+  const [breakRing, setBreakRing] = useState<BreakRing | null>(null);
+
+  const handleBreakProgress = useCallback((progress: number, x: number, y: number) => {
+    setBreakRing({ progress, x, y });
+  }, []);
+
+  const handleBreakCancel = useCallback(() => {
+    setBreakRing(null);
+  }, []);
+
   const {
     onJoystickMove,
     onJoystickRelease,
@@ -51,6 +71,8 @@ export default function MobileControls({
     getPlayerState: () => gameRef.current?.playerState ?? null,
     onPlaceBlock,
     onBreakBlock,
+    onBreakProgress: handleBreakProgress,
+    onBreakCancel: handleBreakCancel,
   });
 
   if (isPaused) return null;
@@ -75,6 +97,15 @@ export default function MobileControls({
         onTouchEnd={onRightTouchEnd}
         onTouchCancel={onRightTouchEnd}
       />
+
+      {/* Break progress ring */}
+      {breakRing && (
+        <BreakProgressRing
+          progress={breakRing.progress}
+          x={breakRing.x}
+          y={breakRing.y}
+        />
+      )}
 
       {/* Pause button — top right */}
       <button
@@ -110,6 +141,56 @@ export default function MobileControls({
 
       {/* Hotbar */}
       <MobileHotbar hotbarIndex={hotbarIndex} onSelect={onHotbarChange} />
+    </div>
+  );
+}
+
+// ── Break Progress Ring ───────────────────────────────────────────────────────
+
+function BreakProgressRing({ progress, x, y }: { progress: number; x: number; y: number }) {
+  const expandR = RING_R * progress;
+  const expandDiam = expandR * 2;
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        left: x - RING_SIZE / 2,
+        top: y - RING_SIZE * 0.7,
+        width: RING_SIZE,
+        height: RING_SIZE,
+        pointerEvents: 'none',
+      }}
+    >
+      {/* Outer border ring */}
+      <svg
+        width={RING_SIZE}
+        height={RING_SIZE}
+        style={{ position: 'absolute', inset: 0 }}
+      >
+        <circle
+          cx={RING_SIZE / 2}
+          cy={RING_SIZE / 2}
+          r={RING_R}
+          fill="none"
+          stroke="rgba(255,255,255,0.45)"
+          strokeWidth={3}
+        />
+      </svg>
+
+      {/* Invert expanding circle — grows from center outward */}
+      <div
+        style={{
+          position: 'absolute',
+          left: RING_SIZE / 2 - expandR,
+          top: RING_SIZE / 2 - expandR,
+          width: expandDiam,
+          height: expandDiam,
+          borderRadius: '50%',
+          backdropFilter: 'invert(1)',
+          WebkitBackdropFilter: 'invert(1)',
+        }}
+      />
     </div>
   );
 }
