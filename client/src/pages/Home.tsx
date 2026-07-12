@@ -236,28 +236,54 @@ export default function Home() {
         {isHomeFullscreen ? <Minimize2 size={22} strokeWidth={2.5} /> : <Maximize2 size={22} strokeWidth={2.5} />}
       </button>
 
-      {/* Clouds */}
-      <div style={{ position: 'absolute', top: '8%', left: '5%', opacity: 0.85 }}>
-        <CloudShape />
-      </div>
-      <div style={{ position: 'absolute', top: '15%', right: '10%', opacity: 0.7, transform: 'scale(0.7)' }}>
-        <CloudShape />
-      </div>
-
-      {/* Title */}
-      <div style={{ textAlign: 'center', marginBottom: '40px', position: 'relative' }}>
+      {/* Title with flanking clouds */}
+      <div style={{
+        position: 'relative',
+        width: '100%',
+        maxWidth: 'min(92vw, 520px)',
+        padding: '0 12px',
+        marginBottom: '40px',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+      }}>
         <div style={{
-          position: 'absolute', top: '5px', left: '5px',
-          fontSize: 'clamp(26px, 5.5vw, 52px)',
-          color: '#3A3A00', letterSpacing: '2px', whiteSpace: 'nowrap',
+          position: 'absolute',
+          top: '50%',
+          left: '4%',
+          transform: 'translateY(-50%)',
+          opacity: 0.6,
+          pointerEvents: 'none',
+          display: window.innerWidth > 520 ? 'block' : 'none',
+        }}>
+          <CloudShape />
+        </div>
+        <div style={{
+          position: 'absolute',
+          top: '50%',
+          right: '4%',
+          transform: 'translateY(-50%) scale(0.7)',
+          opacity: 0.5,
+          pointerEvents: 'none',
+          display: window.innerWidth > 520 ? 'block' : 'none',
+        }}>
+          <CloudShape />
+        </div>
+        <div style={{
+          fontSize: 'clamp(20px, 8.4vw, 52px)',
+          color: '#FCFC00',
+          letterSpacing: 'clamp(0px, 0.5vw, 2px)',
+          lineHeight: 1.15,
+          overflowWrap: 'anywhere',
+          textAlign: 'center',
+          textShadow: '5px 5px 0 #3A3A00',
         }}>MINECRAFT</div>
         <div style={{
-          fontSize: 'clamp(26px, 5.5vw, 52px)',
-          color: '#FCFC00', letterSpacing: '2px', whiteSpace: 'nowrap', position: 'relative',
-        }}>MINECRAFT</div>
-        <div style={{
-          fontSize: 'clamp(9px, 1.8vw, 14px)',
-          color: '#fff', textShadow: '2px 2px 0 #000', letterSpacing: '6px', marginTop: '6px',
+          fontSize: 'clamp(9px, 2.2vw, 14px)',
+          color: '#fff', textShadow: '2px 2px 0 #000',
+          letterSpacing: 'clamp(2px, 1.2vw, 6px)',
+          marginTop: '6px',
+          textAlign: 'center',
         }}>WEB DEMO</div>
       </div>
 

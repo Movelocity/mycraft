@@ -5,7 +5,16 @@ import { BLOCK_BREAK_DURATION_MS } from '@/lib/minecraft/breakOverlay';
 const TOUCH_SENS = 0.005;
 const TAP_MAX_MS = 300;
 const TAP_MAX_MOVE_PX = 10;
-const BREAK_COOLDOWN_MS = TAP_MAX_MS/2;
+
+// 必须让准星停留在某个可破坏方块上累计 ARMING_MS 才开始破坏，
+// 避免普通移动视角时把沿途方块误破坏。
+const ARMING_MS = 300;
+
+// 进入连续破坏后，只要准星离开所有可破坏方块超过 RESET_MS，
+// 就视为玩家在「看视角」而非「连续挖掘」，重置回待武装状态。
+const RESET_MS = 350;
+
+type BreakMode = 'idle' | 'arming' | 'breaking';
 
 interface TouchState {
   id: number;
@@ -15,10 +24,11 @@ interface TouchState {
   lastY: number;
   startTime: number;
   // long-press break state
-  breaking: boolean;
+  mode: BreakMode;
+  armingStartTime: number | null;
+  airStartTime: number | null;
   breakTargetKey: string | null;
   breakStartTime: number | null;
-  breakCooldownUntil: number | null;
   breakRaf: number | null;
   cancelled: boolean;
 }
@@ -108,59 +118,88 @@ export function useMobileControls({
       cancelAnimationFrame(ref.breakRaf);
       ref.breakRaf = null;
     }
-    ref.breaking = false;
+    ref.mode = 'idle';
+    ref.armingStartTime = null;
+    ref.airStartTime = null;
     ref.breakTargetKey = null;
     ref.breakStartTime = null;
-    ref.breakCooldownUntil = null;
     ref.cancelled = true;
     onBreakCancel();
   }, [onBreakCancel]);
 
   const startBreakLoop = useCallback((ref: TouchState) => {
-    ref.breaking = true;
+    if (ref.breakRaf !== null) return;
+    ref.mode = 'idle';
+    ref.armingStartTime = null;
+    ref.airStartTime = null;
     ref.breakTargetKey = null;
     ref.breakStartTime = null;
-    ref.breakCooldownUntil = null;
 
     const tick = (now: number) => {
-      if (!ref.breaking || ref.cancelled) return;
-      if (ref.breakCooldownUntil !== null) {
-        if (now < ref.breakCooldownUntil) {
-          ref.breakRaf = requestAnimationFrame(tick);
-          return;
-        }
-        ref.breakCooldownUntil = null;
-      }
+      if (ref.cancelled) return;
 
       const targetKey = getBreakTargetKey();
+
       if (!targetKey) {
-        if (ref.breakTargetKey !== null) {
+        if (ref.mode === 'breaking') {
+          if (ref.airStartTime === null) ref.airStartTime = now;
+          if (now - ref.airStartTime >= RESET_MS) {
+            ref.mode = 'idle';
+            ref.armingStartTime = null;
+            ref.breakTargetKey = null;
+            ref.breakStartTime = null;
+            onBreakCancel();
+          }
+        } else if (ref.mode === 'arming') {
+          ref.mode = 'idle';
+          ref.armingStartTime = null;
+        }
+        ref.airStartTime ??= now;
+        ref.breakRaf = requestAnimationFrame(tick);
+        return;
+      }
+
+      // 准星落在可破坏方块上，重置「离开空气」计时。
+      ref.airStartTime = null;
+
+      if (ref.mode === 'idle') {
+        ref.mode = 'arming';
+        ref.armingStartTime = now;
+        ref.breakTargetKey = targetKey;
+        ref.breakStartTime = null;
+      } else if (ref.mode === 'arming') {
+        if (targetKey !== ref.breakTargetKey) {
+          ref.breakTargetKey = targetKey;
+          ref.armingStartTime = now;
+        }
+        if (ref.armingStartTime !== null && now - ref.armingStartTime >= ARMING_MS) {
+          ref.mode = 'breaking';
+          ref.breakTargetKey = targetKey;
+          ref.breakStartTime = now;
+        }
+      } else if (ref.mode === 'breaking') {
+        // 连续破坏：准星移到新的可破坏方块时立即开始破坏新方块，不重新武装。
+        if (targetKey !== ref.breakTargetKey) {
+          ref.breakTargetKey = targetKey;
+          ref.breakStartTime = now;
+        }
+      }
+
+      if (ref.mode === 'breaking') {
+        const elapsed = now - (ref.breakStartTime ?? now);
+        const progress = Math.min(elapsed / BLOCK_BREAK_DURATION_MS, 1);
+        onBreakProgress(progress, ref.lastX, ref.lastY);
+
+        if (progress >= 1) {
+          onBreakBlock();
+          // 保持 breaking 状态：准星若仍在可破坏方块上，下一帧开始破坏下一个；
+          // 若已离开，进入 air 计时分支，RESET_MS 后回到 idle。
+          ref.breakTargetKey = null;
+          ref.breakStartTime = null;
           onBreakCancel();
         }
-        ref.breakTargetKey = null;
-        ref.breakStartTime = null;
-        ref.breakRaf = requestAnimationFrame(tick);
-        return;
       }
 
-      if (targetKey !== ref.breakTargetKey) {
-        ref.breakTargetKey = targetKey;
-        ref.breakStartTime = now;
-      }
-
-      const elapsed = now - (ref.breakStartTime ?? now);
-      const progress = Math.min(elapsed / BLOCK_BREAK_DURATION_MS, 1);
-      onBreakProgress(progress, ref.lastX, ref.lastY);
-
-      if (progress >= 1) {
-        ref.breakTargetKey = null;
-        ref.breakStartTime = null;
-        ref.breakCooldownUntil = now + BREAK_COOLDOWN_MS;
-        onBreakBlock();
-        onBreakCancel();
-        ref.breakRaf = requestAnimationFrame(tick);
-        return;
-      }
       ref.breakRaf = requestAnimationFrame(tick);
     };
     ref.breakRaf = requestAnimationFrame(tick);
@@ -178,21 +217,17 @@ export function useMobileControls({
       lastX: touch.clientX,
       lastY: touch.clientY,
       startTime: Date.now(),
-      breaking: false,
+      mode: 'idle',
+      armingStartTime: null,
+      airStartTime: null,
       breakTargetKey: null,
       breakStartTime: null,
-      breakCooldownUntil: null,
       breakRaf: null,
       cancelled: false,
     };
     rightTouchRef.current = ref;
 
-    // Start break progress after TAP_MAX_MS (finger still held)
-    setTimeout(() => {
-      const cur = rightTouchRef.current;
-      if (!cur || cur.id !== ref.id || cur.cancelled) return;
-      startBreakLoop(cur);
-    }, TAP_MAX_MS);
+    startBreakLoop(ref);
   }, [startBreakLoop]);
 
   const onRightTouchMove = useCallback((e: React.TouchEvent) => {
@@ -225,7 +260,7 @@ export function useMobileControls({
       const touch = e.changedTouches[i];
       if (touch.identifier !== ref.id) continue;
 
-      if (ref.breaking) {
+      if (ref.mode !== 'idle') {
         cancelBreak(ref);
       }
 

@@ -42,7 +42,7 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
   const debugRef = useRef<DebugOverlayHandle>(null);
   const [showHelp, setShowHelp] = useState(false);
   const [flying, setFlying] = useState(loadData?.player?.flying ?? false);
-  const [isPaused, setIsPaused] = useState(!isMobile);
+  const [isPaused, setIsPaused] = useState(false);
   const [hearts] = useState(10);
   const [saveNotification, setSaveNotification] = useState<string | null>(null);
   const [isMoving, setIsMoving] = useState(false);
