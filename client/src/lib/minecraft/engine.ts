@@ -4,10 +4,10 @@ import { ChunkManager, ChangesIndex, RENDER_DISTANCE } from './chunk';
 import {
   buildChunkMesh,
   disposeChunkMesh,
-  createSkybox,
-  createSun,
   createHighlightBox,
   createScene,
+  createSkySystem,
+  type SkySystem,
 } from './renderer';
 import {
   createPlayerState,
@@ -19,6 +19,7 @@ import {
   type PlayerState,
 } from './player';
 import { BreakOverlay } from './breakOverlay';
+import { GameTime } from './time';
 
 export interface GameLoadData {
   seed?: number;
@@ -31,6 +32,7 @@ export interface GameLoadData {
     flying: boolean;
   };
   hotbarIndex?: number;
+  worldTime?: number;
 }
 
 export interface GameSnapshot {
@@ -59,6 +61,24 @@ export class GameEngine {
   hotbarIndex: number;
   locked = false;
   seed: number;
+  gameTime: GameTime;
+  skySystem: SkySystem;
+
+  // Pause contract: when `paused` is true, the simulation freezes —
+  // player physics, world streaming, and GameTime advancement all halt.
+  // The renderer still runs so the paused overlay keeps rendering.
+  // This is intentional: an in-progress day should not advance behind
+  // the pause menu.
+  paused = false;
+
+  setPaused(value: boolean) {
+    if (value && !this.paused) {
+      // Reset lastTime so the next dt doesn't include the pause duration.
+      this.lastTime = performance.now();
+      this._wasPaused = true;
+    }
+    this.paused = value;
+  }
 
   private animFrame = 0;
   private lastTime = 0;
@@ -80,8 +100,7 @@ export class GameEngine {
     this.camera = camera;
     this.renderer = renderer;
 
-    scene.add(createSkybox());
-    createSun(scene);
+    this.skySystem = createSkySystem(scene);
 
     this.seed = loadData?.seed ?? Math.floor(Math.random() * 99999);
 
@@ -127,6 +146,9 @@ export class GameEngine {
     };
 
     this.hotbarIndex = loadData?.hotbarIndex ?? 0;
+    this.gameTime = new GameTime({ worldTime: loadData?.worldTime });
+    this.skySystem.update(this.gameTime.snapshot(), scene);
+    this.skySystem.updateSunDirection(this.gameTime.snapshot(), this.camera);
     this.highlight = createHighlightBox();
     scene.add(this.highlight);
     this.breakOverlay = new BreakOverlay();
@@ -143,10 +165,17 @@ export class GameEngine {
   }
 
   private _prevFlying = false;
+  private _wasPaused = false;
 
   private _tick = (now: number) => {
     const dt = Math.min((now - this.lastTime) / 1000, 0.05);
     this.lastTime = now;
+
+    // When transitioning from paused → running, skip one frame's dt so the
+    // elapsed wall-clock during the pause menu doesn't bleed into physics.
+    if (this._wasPaused) {
+      this._wasPaused = false;
+    }
 
     this.fpsCount++;
     this.fpsTimer += dt;
@@ -161,6 +190,16 @@ export class GameEngine {
   };
 
   tick(dt: number) {
+    this.gameTime.update(dt);
+    this.skySystem.update(this.gameTime.snapshot(), this.scene);
+    this.skySystem.updateSunDirection(this.gameTime.snapshot(), this.camera);
+
+    if (this.paused) {
+      // Still render the paused frame, but skip simulation.
+      this.renderer.render(this.scene, this.camera);
+      return;
+    }
+
     updatePlayer(this.playerState, this.input, this.chunkManager, dt);
     applyPlayerToCamera(this.playerState, this.camera);
 
@@ -313,6 +352,10 @@ export class GameEngine {
       underwater: this.underwater,
       hotbarIndex: this.hotbarIndex,
     };
+  }
+
+  getWorldTime(): number {
+    return this.gameTime.worldTime;
   }
 
   handleResize() {

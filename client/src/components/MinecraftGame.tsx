@@ -24,6 +24,7 @@ export interface GameInitData {
     flying: boolean;
   };
   hotbarIndex?: number;
+  worldTime?: number;
 }
 
 interface MinecraftGameProps {
@@ -113,6 +114,7 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
     const data = extractSaveData({
       slot,
       seed: e.seed,
+      worldTime: e.getWorldTime(),
       changesIndex: e.chunkManager.changesIndex,
       player: e.playerState,
       hotbarIndex: e.hotbarIndex,
@@ -139,6 +141,7 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
       const data = extractSaveData({
         slot,
         seed: e.seed,
+        worldTime: e.getWorldTime(),
         changesIndex: e.chunkManager.changesIndex,
         player: e.playerState,
         hotbarIndex: e.hotbarIndex,
@@ -168,6 +171,7 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
       changesIndex: loadData?.changesIndex,
       player: loadData?.player,
       hotbarIndex: loadData?.hotbarIndex,
+      worldTime: loadData?.worldTime,
     };
 
     const engine = new GameEngine(canvas, gameLoadData);
@@ -248,6 +252,10 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
   useEffect(() => {
     return initGame();
   }, [initGame]);
+
+  useEffect(() => {
+    engineRef.current?.setPaused(isPaused);
+  }, [isPaused]);
 
   useEffect(() => {
     const onEscape = (event: KeyboardEvent) => {

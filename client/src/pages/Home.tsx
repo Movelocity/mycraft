@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Maximize2, Minimize2 } from 'lucide-react';
 import MinecraftGame, { type GameInitData } from '@/components/MinecraftGame';
-import { listSaves, loadGame, deleteSave, type SaveInfo } from '@/lib/minecraft/save';
+import { listSaves, loadGame, deleteSave, restoreFromSave, type SaveInfo, type LoadResult } from '@/lib/minecraft/save';
 import {
   applyPwaUpdate,
   checkForPwaUpdate,
@@ -20,6 +20,7 @@ export default function Home() {
   const [saves, setSaves] = useState<SaveInfo[]>([]);
   const [showRotateHint, setShowRotateHint] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
+  const [unsupportedSlot, setUnsupportedSlot] = useState<number | null>(null);
   const [mobileOrientationBlock, setMobileOrientationBlock] = useState<number | null>(null);
   const [pwaInstallState, setPwaInstallState] = useState(getPwaInstallState);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>('idle');
@@ -76,15 +77,19 @@ export default function Home() {
   }, [mobileOrientationBlock]);
 
   const doEnterGame = async (slot: number, mobile: boolean) => {
-    const saveData = await loadGame(slot);
-    if (saveData) {
-      const { restoreFromSave } = await import('@/lib/minecraft/save');
-      const restored = restoreFromSave(saveData);
+    const result: LoadResult = await loadGame(slot);
+    if (result.kind === 'ok') {
+      const restored = restoreFromSave(result.data);
       setGameData({ data: restored, slot, mobile });
-    } else {
-      const seed = Math.floor(Math.random() * 99999);
-      setGameData({ data: { seed }, slot, mobile });
+      return;
     }
+    if (result.kind === 'unsupported-version' || result.kind === 'corrupt') {
+      setUnsupportedSlot(slot);
+      return;
+    }
+    // Empty slot — start a fresh world.
+    const seed = Math.floor(Math.random() * 99999);
+    setGameData({ data: { seed }, slot, mobile });
   };
 
   const handleSelectSlot = async (slot: number) => {
@@ -110,6 +115,20 @@ export default function Home() {
     await deleteSave(confirmDelete);
     setConfirmDelete(null);
     refreshSaves();
+  };
+
+  const handleUnsupportedDismiss = () => {
+    setUnsupportedSlot(null);
+    refreshSaves();
+  };
+
+  const handleUnsupportedDelete = async () => {
+    if (unsupportedSlot === null) return;
+    const slot = unsupportedSlot;
+    await deleteSave(slot);
+    setUnsupportedSlot(null);
+    await refreshSaves();
+    await doEnterGame(slot, isMobile);
   };
 
   const handleBackToMenu = () => {
@@ -443,6 +462,67 @@ export default function Home() {
                 }}
               >
                 取消
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Unsupported save modal — v1/v2 saves or corrupt data */}
+      {unsupportedSlot !== null && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 9998,
+          background: 'rgba(0,0,0,0.78)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <div style={{
+            background: '#222',
+            border: '4px solid #000',
+            borderRight: '4px solid #111',
+            borderBottom: '4px solid #111',
+            padding: '28px 32px',
+            fontFamily: "'Press Start 2P', monospace",
+            color: '#fff',
+            textAlign: 'center',
+            maxWidth: 340,
+            width: '88%',
+          }}>
+            <div style={{ fontSize: 11, marginBottom: 14, color: '#FCFC00', textShadow: '2px 2px 0 #000' }}>
+              存档格式不兼容
+            </div>
+            <div style={{ fontSize: 7, color: '#ccc', lineHeight: 2, marginBottom: 22 }}>
+              存档 {unsupportedSlot} 的版本过旧或已损坏。
+              <br />
+              请删除该存档并重新创建新世界。
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <button
+                onClick={handleUnsupportedDelete}
+                style={{
+                  background: '#7a1a1a',
+                  border: '3px solid #000',
+                  borderRight: '3px solid #2A2A2A',
+                  borderBottom: '3px solid #2A2A2A',
+                  color: '#fff',
+                  fontFamily: "'Press Start 2P', monospace",
+                  fontSize: 8, padding: '10px 16px', cursor: 'pointer',
+                }}
+              >
+                删除并重新创建
+              </button>
+              <button
+                onClick={handleUnsupportedDismiss}
+                style={{
+                  background: '#444',
+                  border: '3px solid #000',
+                  borderRight: '3px solid #2A2A2A',
+                  borderBottom: '3px solid #2A2A2A',
+                  color: '#fff',
+                  fontFamily: "'Press Start 2P', monospace",
+                  fontSize: 8, padding: '10px 16px', cursor: 'pointer',
+                }}
+              >
+                返回菜单
               </button>
             </div>
           </div>
