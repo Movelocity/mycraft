@@ -150,7 +150,7 @@ export default function MobileControls({
 
 const BreakProgressRing = forwardRef<BreakRingHandle>((_, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const progressCircleRef = useRef<SVGCircleElement>(null);
+  const fillRef = useRef<HTMLDivElement>(null);
 
   useImperativeHandle(ref, () => ({
     show(x: number, y: number, progress: number) {
@@ -160,15 +160,23 @@ const BreakProgressRing = forwardRef<BreakRingHandle>((_, ref) => {
         el.style.left = `${x - RING_SIZE / 2}px`;
         el.style.top = `${y - RING_SIZE * 0.6}px`;
       }
-      const circle = progressCircleRef.current;
-      if (circle) {
-        const offset = RING_CIRCUMFERENCE * (1 - progress);
-        circle.style.strokeDashoffset = String(offset);
+      const fill = fillRef.current;
+      if (fill) {
+        const diam = RING_R * 2 * progress;
+        fill.style.width = `${diam}px`;
+        fill.style.height = `${diam}px`;
+        fill.style.left = `${RING_SIZE / 2 - diam / 2}px`;
+        fill.style.top = `${RING_SIZE / 2 - diam / 2}px`;
       }
     },
     hide() {
       const el = containerRef.current;
       if (el) el.style.display = 'none';
+      const fill = fillRef.current;
+      if (fill) {
+        fill.style.width = '0px';
+        fill.style.height = '0px';
+      }
     },
   }));
 
@@ -183,29 +191,36 @@ const BreakProgressRing = forwardRef<BreakRingHandle>((_, ref) => {
         pointerEvents: 'none',
       }}
     >
-      <svg width={RING_SIZE} height={RING_SIZE}>
+      {/* Outer border ring */}
+      <svg
+        width={RING_SIZE}
+        height={RING_SIZE}
+        style={{ position: 'absolute', inset: 0 }}
+      >
         <circle
           cx={RING_SIZE / 2}
           cy={RING_SIZE / 2}
           r={RING_R}
           fill="none"
-          stroke="rgba(255,255,255,0.2)"
-          strokeWidth={6}
-        />
-        <circle
-          ref={progressCircleRef}
-          cx={RING_SIZE / 2}
-          cy={RING_SIZE / 2}
-          r={RING_R}
-          fill="none"
-          stroke="rgba(255,255,255,0.9)"
-          strokeWidth={6}
-          strokeLinecap="round"
-          strokeDasharray={RING_CIRCUMFERENCE}
-          strokeDashoffset={RING_CIRCUMFERENCE}
-          transform={`rotate(-90 ${RING_SIZE / 2} ${RING_SIZE / 2})`}
+          stroke="rgba(255,255,255,0.45)"
+          strokeWidth={3}
         />
       </svg>
+
+      {/* Invert expanding circle — grows from center outward */}
+      <div
+        ref={fillRef}
+        style={{
+          position: 'absolute',
+          left: RING_SIZE / 2,
+          top: RING_SIZE / 2,
+          width: 0,
+          height: 0,
+          borderRadius: '50%',
+          backdropFilter: 'invert(1)',
+          WebkitBackdropFilter: 'invert(1)',
+        }}
+      />
     </div>
   );
 });
