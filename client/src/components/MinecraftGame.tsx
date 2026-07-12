@@ -23,7 +23,7 @@ import {
 } from '@/lib/minecraft/player';
 import MobileControls from '@/components/mobile/MobileControls';
 import HeldItem from '@/components/HeldItem';
-import { isMobileUA } from '@/utils/mobile';
+import { exitFullscreen, isMobileUA } from '@/utils/mobile';
 
 export interface GameInitData {
   seed: number;
@@ -74,16 +74,65 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
   const [saveNotification, setSaveNotification] = useState<string | null>(null);
   const [isMoving, setIsMoving] = useState(false);
   const [isUnderwater, setIsUnderwater] = useState(false);
+  const [showExitConfirm, setShowExitConfirm] = useState(false);
   const [placeTrigger, setPlaceTrigger] = useState(0);
   const [breakTrigger, setBreakTrigger] = useState(0);
   const [breakProgress, setBreakProgress] = useState<number | null>(null);
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const movingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const underwaterRef = useRef(false);
+  const isPausedRef = useRef(isPaused);
+  const showExitConfirmRef = useRef(showExitConfirm);
+  const previousPausedRef = useRef(isPaused);
   const setPlaceTriggerRef = useRef(setPlaceTrigger);
   const setBreakTriggerRef = useRef(setBreakTrigger);
   setPlaceTriggerRef.current = setPlaceTrigger;
   setBreakTriggerRef.current = setBreakTrigger;
+  isPausedRef.current = isPaused;
+  showExitConfirmRef.current = showExitConfirm;
+
+  const clearInput = useCallback(() => {
+    const g = gameRef.current;
+    if (!g) return;
+    g.input.forward = false;
+    g.input.backward = false;
+    g.input.left = false;
+    g.input.right = false;
+    g.input.jump = false;
+    g.input.sprint = false;
+    g.input.sneak = false;
+    g.input.fly = false;
+    g.input.flyDown = false;
+    g.input.joystickX = null;
+    g.input.joystickY = null;
+  }, []);
+
+  const openExitConfirm = useCallback(() => {
+    if (showExitConfirmRef.current) return;
+    previousPausedRef.current = isPausedRef.current;
+    showExitConfirmRef.current = true;
+    setShowExitConfirm(true);
+    setIsPaused(true);
+    clearInput();
+    if (document.pointerLockElement === canvasRef.current) {
+      document.exitPointerLock();
+    }
+  }, [clearInput]);
+
+  const cancelExitConfirm = useCallback(() => {
+    showExitConfirmRef.current = false;
+    setShowExitConfirm(false);
+
+    if (previousPausedRef.current) {
+      setIsPaused(true);
+      return;
+    }
+
+    setIsPaused(false);
+    if (!isMobile) {
+      canvasRef.current?.requestPointerLock();
+    }
+  }, [isMobile]);
 
   const rebuildDirtyChunks = useCallback(() => {
     const g = gameRef.current;
@@ -123,6 +172,14 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
     setSaveNotification('游戏已保存');
     setTimeout(() => setSaveNotification(null), 2000);
   }, [slot]);
+
+  const confirmExit = useCallback(async () => {
+    await handleSave();
+    if (document.fullscreenElement) {
+      await exitFullscreen().catch(() => {});
+    }
+    onExit?.();
+  }, [handleSave, onExit]);
 
   const scheduleAutoSave = useCallback(() => {
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
@@ -225,6 +282,7 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
       scheduleAutoSave,
       () => setPlaceTriggerRef.current(t => t + 1),
       () => setBreakTriggerRef.current(t => t + 1),
+      openExitConfirm,
     );
 
     // Prevent pinch-to-zoom on macOS trackpad (desktop only)
@@ -347,11 +405,21 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
         gameRef.current.renderer.dispose();
       }
     };
-  }, [rebuildDirtyChunks, loadData, handleSave, scheduleAutoSave, isMobile]);
+  }, [rebuildDirtyChunks, loadData, handleSave, scheduleAutoSave, isMobile, openExitConfirm]);
 
   useEffect(() => {
     return initGame();
   }, [initGame]);
+
+  useEffect(() => {
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.code !== 'Escape') return;
+      event.preventDefault();
+      openExitConfirm();
+    };
+    document.addEventListener('keydown', onEscape);
+    return () => document.removeEventListener('keydown', onEscape);
+  }, [openExitConfirm]);
 
   return (
     <div
@@ -417,6 +485,34 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
           </span>
         ))}
       </div>
+
+      {!isPaused && !showExitConfirm && (
+        <button
+          onClick={openExitConfirm}
+          onTouchStart={(e) => {
+            e.preventDefault();
+            openExitConfirm();
+          }}
+          style={{
+            position: 'absolute',
+            top: 12,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            background: 'rgba(0,0,0,0.45)',
+            border: '2px solid rgba(255,255,255,0.42)',
+            color: '#fff',
+            fontFamily: "'Press Start 2P', monospace",
+            fontSize: 9,
+            padding: '7px 12px',
+            pointerEvents: 'auto',
+            cursor: 'pointer',
+            textShadow: '1px 1px 0 #000',
+            zIndex: 25,
+          }}
+        >
+          退出
+        </button>
+      )}
 
       {/* Hotbar — hidden on mobile (rendered inside MobileControls) */}
       {!isMobile && <HotbarHUD hotbarIndex={hotbarIndex} />}
@@ -538,6 +634,13 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
             </div>
           </div>
         </div>
+      )}
+
+      {showExitConfirm && (
+        <ExitConfirmOverlay
+          onConfirm={confirmExit}
+          onCancel={cancelExitConfirm}
+        />
       )}
 
       {/* Help overlay */}
@@ -706,6 +809,72 @@ function HelpOverlay({ onClose }: { onClose: () => void }) {
   );
 }
 
+function ExitConfirmOverlay({ onConfirm, onCancel }: { onConfirm: () => void; onCancel: () => void }) {
+  return (
+    <div
+      className="absolute inset-0 flex items-center justify-center"
+      style={{ background: 'rgba(0,0,0,0.72)', zIndex: 120 }}
+    >
+      <div style={{
+        background: '#1c1c1c',
+        border: '3px solid #666',
+        borderRight: '3px solid #333',
+        borderBottom: '3px solid #333',
+        padding: 'clamp(18px, 4vw, 30px) clamp(20px, 5vw, 36px)',
+        color: '#fff',
+        fontFamily: "'Press Start 2P', monospace",
+        fontSize: 'clamp(8px, 2vw, 10px)',
+        textAlign: 'center',
+        width: '84%',
+        maxWidth: '340px',
+      }}>
+        <div style={{ fontSize: 'clamp(11px, 2.8vw, 14px)', color: '#FCFC00', marginBottom: 16 }}>
+          退出游戏？
+        </div>
+        <div style={{ color: '#bbb', fontSize: 'clamp(6px, 1.6vw, 8px)', lineHeight: 2, marginBottom: 22 }}>
+          将保存当前进度并返回首页
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <button
+            onClick={onConfirm}
+            style={{
+              background: '#5D8A3C',
+              border: '3px solid #000',
+              borderRight: '3px solid #2A2A2A',
+              borderBottom: '3px solid #2A2A2A',
+              color: '#fff',
+              fontFamily: "'Press Start 2P', monospace",
+              fontSize: 'clamp(8px, 2vw, 10px)',
+              padding: '12px 24px',
+              cursor: 'pointer',
+              textShadow: '2px 2px 0 #000',
+            }}
+          >
+            保存并退出
+          </button>
+          <button
+            onClick={onCancel}
+            style={{
+              background: '#555',
+              border: '3px solid #000',
+              borderRight: '3px solid #2A2A2A',
+              borderBottom: '3px solid #2A2A2A',
+              color: '#fff',
+              fontFamily: "'Press Start 2P', monospace",
+              fontSize: 'clamp(8px, 2vw, 10px)',
+              padding: '12px 24px',
+              cursor: 'pointer',
+              textShadow: '2px 2px 0 #000',
+            }}
+          >
+            继续游戏
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Desktop input handler (extracted to keep initGame clean) ──────────────────
 
 function attachDesktopHandlers(
@@ -726,6 +895,7 @@ function attachDesktopHandlers(
   scheduleAutoSave: () => void,
   onPlaceAction: () => void,
   onBreakAction: () => void,
+  onExitRequest: () => void,
 ): () => void {
   const onKeyDown = (e: KeyboardEvent) => {
     const g = gameRef.current;
@@ -812,7 +982,12 @@ function attachDesktopHandlers(
     const g = gameRef.current;
     const locked = document.pointerLockElement === canvas;
     if (g) g.locked = locked;
-    setIsPaused(!locked);
+    if (locked) {
+      setIsPaused(false);
+    } else {
+      setIsPaused(true);
+      onExitRequest();
+    }
   };
 
   const onCanvasClick = () => {

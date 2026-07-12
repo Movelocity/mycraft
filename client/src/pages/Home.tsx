@@ -1,8 +1,19 @@
 // Home.tsx — Entry point for Web Minecraft Demo
 import { useState, useEffect, useCallback } from 'react';
+import { Maximize2, Minimize2 } from 'lucide-react';
 import MinecraftGame, { type GameInitData } from '@/components/MinecraftGame';
 import { listSaves, loadGame, deleteSave, type SaveInfo } from '@/lib/minecraft/save';
-import { isMobileUA, enterFullscreen, isLandscape } from '@/utils/mobile';
+import {
+  applyPwaUpdate,
+  checkForPwaUpdate,
+  getPwaInstallState,
+  promptPwaInstall,
+  subscribePwaInstallState,
+  type UpdateCheckResult,
+} from '@/lib/pwa';
+import { isMobileUA, enterFullscreen, exitFullscreen, isLandscape } from '@/utils/mobile';
+
+type UpdateStatus = 'idle' | 'checking' | 'up-to-date' | 'ready' | 'unsupported' | 'error' | 'applying';
 
 export default function Home() {
   const [gameData, setGameData] = useState<{ data: GameInitData; slot: number; mobile: boolean } | null>(null);
@@ -10,13 +21,28 @@ export default function Home() {
   const [showRotateHint, setShowRotateHint] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
   const [mobileOrientationBlock, setMobileOrientationBlock] = useState<number | null>(null);
+  const [pwaInstallState, setPwaInstallState] = useState(getPwaInstallState);
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>('idle');
+  const [isHomeFullscreen, setIsHomeFullscreen] = useState(
+    () => typeof document !== 'undefined' && document.fullscreenElement !== null,
+  );
   const isMobile = isMobileUA();
+  const serviceWorkerSupported = typeof navigator !== 'undefined' && 'serviceWorker' in navigator;
+  const showUpdateActions = serviceWorkerSupported && !pwaInstallState.canPrompt;
 
   const refreshSaves = useCallback(() => listSaves().then(setSaves), []);
 
   useEffect(() => {
     refreshSaves();
   }, [refreshSaves]);
+
+  useEffect(() => subscribePwaInstallState(setPwaInstallState), []);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => setIsHomeFullscreen(document.fullscreenElement !== null);
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
 
   useEffect(() => {
     if (!gameData?.mobile) return;
@@ -91,6 +117,34 @@ export default function Home() {
     refreshSaves();
   };
 
+  const handleInstallApp = async () => {
+    await promptPwaInstall();
+  };
+
+  const handleCheckUpdate = async () => {
+    setUpdateStatus('checking');
+    const result = await checkForPwaUpdate();
+    setUpdateStatus(mapUpdateStatus(result));
+  };
+
+  const handleApplyUpdate = async () => {
+    setUpdateStatus('applying');
+    const applied = await applyPwaUpdate();
+    if (!applied) setUpdateStatus('error');
+  };
+
+  const handleToggleFullscreen = async () => {
+    if (document.fullscreenElement) {
+      await exitFullscreen().catch(() => {});
+      return;
+    }
+    if (isMobile) {
+      await enterFullscreen().catch(() => {});
+      return;
+    }
+    await document.documentElement.requestFullscreen().catch(() => {});
+  };
+
   if (mobileOrientationBlock !== null) {
     return (
       <div style={{
@@ -158,6 +212,30 @@ export default function Home() {
         userSelect: 'none',
       }}
     >
+      <button
+        onClick={handleToggleFullscreen}
+        title={isHomeFullscreen ? '退出全屏' : '进入全屏'}
+        aria-label={isHomeFullscreen ? '退出全屏' : '进入全屏'}
+        style={{
+          position: 'absolute',
+          top: 16,
+          right: 16,
+          zIndex: 2,
+          width: 38,
+          height: 38,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'transparent',
+          border: 'none',
+          color: '#fff',
+          cursor: 'pointer',
+          filter: 'drop-shadow(2px 2px 0 #000)',
+        }}
+      >
+        {isHomeFullscreen ? <Minimize2 size={22} strokeWidth={2.5} /> : <Maximize2 size={22} strokeWidth={2.5} />}
+      </button>
+
       {/* Clouds */}
       <div style={{ position: 'absolute', top: '8%', left: '5%', opacity: 0.85 }}>
         <CloudShape />
@@ -234,6 +312,82 @@ export default function Home() {
             )}
           </div>
         ))}
+      </div>
+
+      {/* PWA actions — home screen only */}
+      <div style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        alignItems: 'center',
+        marginBottom: 18,
+        width: '90%',
+        maxWidth: 360,
+      }}>
+        {pwaInstallState.canPrompt && (
+          <button
+            onClick={handleInstallApp}
+            style={homeActionButtonStyle('#315e8a')}
+          >
+            安装应用
+          </button>
+        )}
+        {pwaInstallState.canShowManualHint && (
+          <div style={{
+            color: 'rgba(255,255,255,0.62)',
+            fontSize: 'clamp(6px, 1.5vw, 7px)',
+            lineHeight: 1.8,
+            textAlign: 'center',
+            textShadow: '1px 1px 0 #000',
+          }}>
+            可通过浏览器菜单添加到主屏幕
+          </div>
+        )}
+        {showUpdateActions && (
+          <div style={{ display: 'flex', gap: 8, width: '100%' }}>
+            <button
+              onClick={handleCheckUpdate}
+              disabled={updateStatus === 'checking' || updateStatus === 'applying'}
+              style={{
+                ...homeTextButtonStyle(),
+                flex: 1,
+                opacity: updateStatus === 'checking' || updateStatus === 'applying' ? 0.65 : 1,
+              }}
+            >
+              {updateStatus === 'checking' ? '检查中...' : '检查更新'}
+            </button>
+            {updateStatus === 'ready' && (
+              <button
+                onClick={handleApplyUpdate}
+                style={{ ...homeTextButtonStyle(), flex: 1, color: '#FCFC00' }}
+              >
+                应用更新
+              </button>
+            )}
+          </div>
+        )}
+        {updateStatus !== 'idle' && updateStatus !== 'ready' && (
+          <div style={{
+            color: updateStatus === 'error' || updateStatus === 'unsupported' ? '#ffb0a8' : '#FCFC00',
+            fontSize: 'clamp(6px, 1.5vw, 7px)',
+            lineHeight: 1.8,
+            textAlign: 'center',
+            textShadow: '1px 1px 0 #000',
+          }}>
+            {getUpdateMessage(updateStatus)}
+          </div>
+        )}
+        {updateStatus === 'ready' && (
+          <div style={{
+            color: '#FCFC00',
+            fontSize: 'clamp(6px, 1.5vw, 7px)',
+            lineHeight: 1.8,
+            textAlign: 'center',
+            textShadow: '1px 1px 0 #000',
+          }}>
+            发现新版本，点击应用更新后会重新载入
+          </div>
+        )}
       </div>
 
       {/* Delete Confirm Modal */}
@@ -332,4 +486,68 @@ function CloudShape() {
       <rect x="40" y="10" width="40" height="20" fill="white" />
     </svg>
   );
+}
+
+function homeActionButtonStyle(background: string): React.CSSProperties {
+  return {
+    width: '100%',
+    background,
+    border: '3px solid #000',
+    borderRight: '3px solid #2A2A2A',
+    borderBottom: '3px solid #2A2A2A',
+    color: '#fff',
+    fontFamily: "'Press Start 2P', monospace",
+    fontSize: 'clamp(7px, 1.8vw, 9px)',
+    padding: '10px 14px',
+    cursor: 'pointer',
+    textShadow: '2px 2px 0 #000',
+    textAlign: 'center',
+    lineHeight: '1.7',
+  };
+}
+
+function homeTextButtonStyle(): React.CSSProperties {
+  return {
+    width: '100%',
+    background: 'transparent',
+    border: 'none',
+    color: '#fff',
+    fontFamily: "'Press Start 2P', monospace",
+    fontSize: 'clamp(7px, 1.8vw, 9px)',
+    padding: '8px 10px',
+    cursor: 'pointer',
+    textShadow: '2px 2px 0 #000',
+    textAlign: 'center',
+    lineHeight: '1.7',
+  };
+}
+
+function mapUpdateStatus(result: UpdateCheckResult): UpdateStatus {
+  switch (result) {
+    case 'update-ready':
+      return 'ready';
+    case 'up-to-date':
+      return 'up-to-date';
+    case 'unsupported':
+      return 'unsupported';
+    case 'error':
+      return 'error';
+  }
+}
+
+function getUpdateMessage(status: UpdateStatus): string {
+  switch (status) {
+    case 'checking':
+      return '正在检查更新';
+    case 'up-to-date':
+      return '已是最新版本';
+    case 'unsupported':
+      return '当前环境不支持应用更新';
+    case 'applying':
+      return '正在应用更新';
+    case 'error':
+      return '更新检查失败，请稍后重试';
+    default:
+      return '';
+  }
 }

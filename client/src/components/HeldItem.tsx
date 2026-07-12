@@ -127,22 +127,29 @@ function getActionTransform(action: { kind: ActionKind; progress: number } | nul
     return `translate(${-30 * thrust}px, ${-34 * thrust}px) scale(${1 - 0.08 * thrust}) rotate(${baseRotation - 8 * thrust}deg)`;
   }
 
-  const chop = Math.abs(Math.sin(action.progress * Math.PI * 7.5));
-  const returnEase = 1 - action.progress;
-  const x = -14 * chop * returnEase;
-  const y = -42 * chop * returnEase;
-  const rotation = baseRotation + 34 * chop * returnEase;
+  const hit = Math.sin(action.progress * Math.PI);
+  const settle = Math.sin(action.progress * Math.PI * 2) * Math.pow(1 - action.progress, 2);
+  const x = -18 * hit - 3 * settle;
+  const y = -36 * hit - 5 * settle;
+  const rotation = baseRotation + 28 * hit + 4 * settle;
   return `translate(${x}px, ${y}px) rotate(${rotation}deg)`;
 }
 
 function getBreakProgressTransform(progress: number): string {
   const baseRotation = -20;
-  const chop = Math.pow(Math.max(0, Math.sin(progress * Math.PI * 4.5)), 0.75);
-  const intensity = 0.5 + progress * 0.25;
-  const x = -8 * chop * intensity;
-  const y = -28 * chop * intensity;
-  const rotation = baseRotation + 22 * chop * intensity;
+  const envelope = smoothStep(0, 0.16, progress) * (1 - smoothStep(0.82, 1, progress));
+  const pulse = 0.5 - 0.5 * Math.cos(progress * Math.PI * 4);
+  const chop = pulse * envelope;
+  const intensity = 0.55 + progress * 0.18;
+  const x = -7 * chop * intensity;
+  const y = -22 * chop * intensity;
+  const rotation = baseRotation + 17 * chop * intensity;
   return `translate(${x}px, ${y}px) rotate(${rotation}deg)`;
+}
+
+function smoothStep(edge0: number, edge1: number, value: number): number {
+  const t = Math.max(0, Math.min(1, (value - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
 }
 
 function darken(hex: string, amount: number): string {

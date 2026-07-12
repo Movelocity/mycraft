@@ -11,7 +11,8 @@ const SPRINT_MULTIPLIER = 1.6;
 const JUMP_VELOCITY = 8.0;
 const GRAVITY = -20.0;
 const PLAYER_RADIUS = 0.3;
-const JUMP_DOUBLE_TAP_WINDOW = 300; // ms for double-jump to fly
+const JUMP_DOUBLE_TAP_WINDOW = 500; // ms for double-jump to fly
+const SNEAK_DOUBLE_TAP_WINDOW = 300; // ms for double-shift to exit fly
 const SNEAK_SPEED_MULTIPLIER = 0.5;
 const SNEAK_EYE_OFFSET = 0.3;
 
@@ -24,6 +25,7 @@ export interface PlayerState {
   flying: boolean;
   sneaking: boolean;
   wasJumpPressed: boolean;
+  lastJumpTime: number;
   lastSneakTime: number;
   wasSneakPressed: boolean;
 }
@@ -38,6 +40,7 @@ export function createPlayerState(spawnX: number, spawnY: number, spawnZ: number
     flying: false,
     sneaking: false,
     wasJumpPressed: false,
+    lastJumpTime: 0,
     lastSneakTime: 0,
     wasSneakPressed: false,
   };
@@ -167,14 +170,19 @@ export function updatePlayer(
   // Jump or enter flying
   const jumpJustPressed = input.jump && !state.wasJumpPressed;
   if (jumpJustPressed && !state.flying) {
+    const now = performance.now();
     if (state.onGround) {
       // On ground: normal jump
       state.velocity.y = JUMP_VELOCITY;
       state.onGround = false;
-    } else {
-      // In air: enter flying mode
+      state.lastJumpTime = now;
+    } else if (now - state.lastJumpTime <= JUMP_DOUBLE_TAP_WINDOW) {
+      // In air: enter flying mode only after a recent jump
       state.flying = true;
       state.velocity.y = 0;
+      state.lastJumpTime = 0;
+    } else {
+      state.lastJumpTime = 0;
     }
   }
   state.wasJumpPressed = input.jump;
@@ -183,7 +191,7 @@ export function updatePlayer(
   const sneakJustPressed = input.sneak && !state.wasSneakPressed;
   if (sneakJustPressed && state.flying) {
     const now = performance.now();
-    if (now - state.lastSneakTime < JUMP_DOUBLE_TAP_WINDOW) {
+    if (now - state.lastSneakTime < SNEAK_DOUBLE_TAP_WINDOW) {
       state.flying = false;
       state.lastSneakTime = 0;
     } else {
@@ -251,12 +259,6 @@ export function updatePlayer(
 
     // Gravity
     state.velocity.y += GRAVITY * dt;
-
-    // Jump
-    if (jumpJustPressed && state.onGround) {
-      state.velocity.y = JUMP_VELOCITY;
-      state.onGround = false;
-    }
   }
 
   // Apply Y movement with collision
@@ -265,6 +267,7 @@ export function updatePlayer(
   if (yResult.blocked) {
     if (state.velocity.y < 0) {
       state.onGround = true;
+      state.lastJumpTime = 0;
       const flyingDown = state.flying && (input.sneak || input.flyDown);
       if (flyingDown) {
         state.flying = false;
