@@ -1,6 +1,7 @@
 import { jsxLocPlugin } from "@builder.io/vite-plugin-jsx-loc";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { defineConfig, type Plugin, type ViteDevServer } from "vite";
@@ -203,7 +204,50 @@ function vitePluginStorageProxy(): Plugin {
   };
 }
 
-const plugins = [react(), tailwindcss(), jsxLocPlugin(), vitePluginManusRuntime(), vitePluginManusDebugCollector(), vitePluginStorageProxy()];
+function vitePluginInjectPwaPrecache(): Plugin {
+  return {
+    name: "inject-pwa-precache",
+    apply: "build",
+    closeBundle() {
+      const publicDir = path.resolve(PROJECT_ROOT, "dist", "public");
+      const swPath = path.join(publicDir, "sw.js");
+      const assetsDir = path.join(publicDir, "assets");
+
+      if (!fs.existsSync(swPath) || !fs.existsSync(assetsDir)) {
+        return;
+      }
+
+      const assets = collectFiles(assetsDir)
+        .map((filePath) => `/${path.relative(publicDir, filePath).split(path.sep).join("/")}`)
+        .sort();
+      const version = crypto.createHash("sha256").update(assets.join("\n")).digest("hex").slice(0, 12);
+      const assetList = assets.map((asset) => JSON.stringify(asset)).join(",\n  ");
+      const swSource = fs.readFileSync(swPath, "utf-8");
+      const nextSource = swSource
+        .replace('"__PRECACHE_VERSION__"', JSON.stringify(version))
+        .replace("/* __PRECACHE_ASSETS__ */", assetList);
+
+      fs.writeFileSync(swPath, nextSource, "utf-8");
+    },
+  };
+}
+
+function collectFiles(dir: string): string[] {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const entryPath = path.join(dir, entry.name);
+    return entry.isDirectory() ? collectFiles(entryPath) : [entryPath];
+  });
+}
+
+const plugins = [
+  react(),
+  tailwindcss(),
+  jsxLocPlugin(),
+  vitePluginManusRuntime(),
+  vitePluginManusDebugCollector(),
+  vitePluginStorageProxy(),
+  vitePluginInjectPwaPrecache(),
+];
 
 export default defineConfig({
   plugins,
