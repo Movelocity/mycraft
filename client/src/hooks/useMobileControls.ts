@@ -1,10 +1,10 @@
 import { useCallback, useRef } from 'react';
 import { InputState } from '@/lib/minecraft/player';
+import { BLOCK_BREAK_DURATION_MS } from '@/lib/minecraft/breakOverlay';
 
 const TOUCH_SENS = 0.005;
 const TAP_MAX_MS = 300;
 const TAP_MAX_MOVE_PX = 10;
-const BREAK_DURATION_MS = 400; // time to fill the ring and break
 const BREAK_COOLDOWN_MS = TAP_MAX_MS/2;
 
 interface TouchState {
@@ -149,7 +149,7 @@ export function useMobileControls({
       }
 
       const elapsed = now - (ref.breakStartTime ?? now);
-      const progress = Math.min(elapsed / BREAK_DURATION_MS, 1);
+      const progress = Math.min(elapsed / BLOCK_BREAK_DURATION_MS, 1);
       onBreakProgress(progress, ref.lastX, ref.lastY);
 
       if (progress >= 1) {

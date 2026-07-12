@@ -18,6 +18,7 @@ import {
   type InputState,
   type PlayerState,
 } from './player';
+import { BreakOverlay } from './breakOverlay';
 
 export interface GameLoadData {
   seed?: number;
@@ -54,6 +55,7 @@ export class GameEngine {
   playerState: PlayerState;
   input: InputState;
   highlight: THREE.LineSegments;
+  breakOverlay: BreakOverlay;
   hotbarIndex: number;
   locked = false;
   seed: number;
@@ -127,6 +129,8 @@ export class GameEngine {
     this.hotbarIndex = loadData?.hotbarIndex ?? 0;
     this.highlight = createHighlightBox();
     scene.add(this.highlight);
+    this.breakOverlay = new BreakOverlay();
+    scene.add(this.breakOverlay.object);
   }
 
   onUnderwaterChanged(cb: (v: boolean) => void) { this.onUnderwaterChange = cb; }
@@ -256,6 +260,7 @@ export class GameEngine {
     const pz = target.blockPos.z + target.faceNormal.z;
     if (isPlayerOverlappingBlock(this.playerState, px, py, pz)) return false;
     const blockType = HOTBAR_BLOCKS[this.hotbarIndex];
+    this.clearBreakProgress();
     this.chunkManager.setBlock(px, py, pz, blockType);
     return true;
   }
@@ -264,8 +269,28 @@ export class GameEngine {
     const target = this.getTargetBlock();
     if (!target?.hit) return false;
     const { x, y, z } = target.blockPos;
+    this.clearBreakProgress();
     this.chunkManager.setBlock(x, y, z, 'air');
     return true;
+  }
+
+  updateBreakProgress(progress: number | null): void {
+    if (progress === null) {
+      this.clearBreakProgress();
+      return;
+    }
+
+    const target = this.getTargetBlock();
+    if (!target?.hit) {
+      this.clearBreakProgress();
+      return;
+    }
+
+    this.breakOverlay.setTarget(target.blockPos, progress);
+  }
+
+  clearBreakProgress(): void {
+    this.breakOverlay.clear();
   }
 
   getBreakTargetKey(): string | null {
@@ -307,6 +332,7 @@ export class GameEngine {
       });
       this.scene.remove(obj);
     }
+    this.breakOverlay.dispose();
     this.renderer.dispose();
   }
 }

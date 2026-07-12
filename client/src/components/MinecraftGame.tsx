@@ -4,16 +4,11 @@
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import DebugOverlay, { type DebugOverlayHandle } from '@/components/DebugOverlay';
-import * as THREE from 'three';
 import { BLOCKS, HOTBAR_BLOCKS, type BlockType } from '@/lib/minecraft/blocks';
-import { ChangesIndex, type ChunkManager } from '@/lib/minecraft/chunk';
+import { ChangesIndex } from '@/lib/minecraft/chunk';
 import { GameEngine, type GameLoadData } from '@/lib/minecraft/engine';
-import {
-  type PlayerState,
-  isPlayerOverlappingBlock,
-  getTargetBlock,
-  InputState,
-} from '@/lib/minecraft/player';
+import { InputState } from '@/lib/minecraft/player';
+import { BLOCK_BREAK_DURATION_MS } from '@/lib/minecraft/breakOverlay';
 import MobileControls from '@/components/mobile/MobileControls';
 import HeldItem from '@/components/HeldItem';
 import { exitFullscreen, isMobileUA } from '@/utils/mobile';
@@ -158,6 +153,11 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
     return engineRef.current?.getBreakTargetKey() ?? null;
   }, []);
 
+  const updateBreakProgress = useCallback((progress: number | null) => {
+    setBreakProgress(progress);
+    engineRef.current?.updateBreakProgress(progress);
+  }, []);
+
   const initGame = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -177,25 +177,15 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
     engine.onFlyingChanged(setFlying);
     engine.onDebugUpdated((snap) => debugRef.current?.update(snap));
 
-    // ── Desktop-only input handlers ───────────────────────────────────────────
-    // engineRef.current is a GameEngine which directly exposes input/playerState/hotbarIndex/locked/chunkManager/camera
-    const engineGameRef = engineRef as unknown as React.MutableRefObject<{
-      input: InputState;
-      playerState: typeof engine.playerState;
-      hotbarIndex: number;
-      locked: boolean;
-      chunkManager: typeof engine.chunkManager;
-      camera: typeof engine.camera;
-    } | null>;
-
     const cleanupDesktop = isMobile ? () => {} : attachDesktopHandlers(
       canvas,
-      engineGameRef,
+      engineRef,
       (i) => { setHotbarIndex(i); if (engineRef.current) engineRef.current.hotbarIndex = i; },
       setShowHelp,
       setIsPaused,
       handleSave,
       scheduleAutoSave,
+      updateBreakProgress,
       () => setPlaceTriggerRef.current(t => t + 1),
       () => setBreakTriggerRef.current(t => t + 1),
       openExitConfirm,
@@ -253,7 +243,7 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
       engine.dispose();
       engineRef.current = null;
     };
-  }, [loadData, handleSave, scheduleAutoSave, isMobile, openExitConfirm]);
+  }, [loadData, handleSave, scheduleAutoSave, updateBreakProgress, isMobile, openExitConfirm]);
 
   useEffect(() => {
     return initGame();
@@ -382,7 +372,7 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
           }}
           onPause={() => setIsPaused(true)}
           getBreakTargetKey={getBreakTargetKey}
-          onBreakProgressChange={setBreakProgress}
+          onBreakProgressChange={updateBreakProgress}
           onPlaceBlock={() => {
             const e = engineRef.current;
             if (!e) return;
@@ -708,24 +698,95 @@ function ExitConfirmOverlay({ onConfirm, onCancel }: { onConfirm: () => void; on
 
 function attachDesktopHandlers(
   canvas: HTMLCanvasElement,
-  gameRef: React.MutableRefObject<{
-    input: InputState;
-    playerState: PlayerState;
-    hotbarIndex: number;
-    locked: boolean;
-    chunkManager: ChunkManager;
-    camera: THREE.PerspectiveCamera;
-  } | null>,
+  gameRef: React.MutableRefObject<GameEngine | null>,
   setHotbarIndex: (i: number) => void,
   setShowHelp: (fn: (v: boolean) => boolean) => void,
   setIsPaused: (v: boolean) => void,
   handleSave: () => void,
   scheduleAutoSave: () => void,
+  onBreakProgressChange: (progress: number | null) => void,
   onPlaceAction: () => void,
   onBreakAction: () => void,
   onExitRequest: () => void,
   debugOverlayRef: React.RefObject<DebugOverlayHandle | null>,
 ): () => void {
+  let breakRaf = 0;
+  let breakTargetKey: string | null = null;
+  let breakStartTime = 0;
+  let breakCooldownUntil = 0;
+  const breakCooldownMs = 120;
+
+  const clearBreakVisual = () => {
+    gameRef.current?.updateBreakProgress(null);
+    onBreakProgressChange(null);
+  };
+
+  const stopBreaking = (clearVisual = true) => {
+    if (breakRaf !== 0) {
+      cancelAnimationFrame(breakRaf);
+      breakRaf = 0;
+    }
+    breakTargetKey = null;
+    breakStartTime = 0;
+    breakCooldownUntil = 0;
+    if (clearVisual) clearBreakVisual();
+  };
+
+  const tickBreaking = (now: number) => {
+    const g = gameRef.current;
+    if (!g || !g.locked) {
+      stopBreaking();
+      return;
+    }
+
+    if (now < breakCooldownUntil) {
+      breakRaf = requestAnimationFrame(tickBreaking);
+      return;
+    }
+
+    const targetKey = g.getBreakTargetKey();
+    if (!targetKey) {
+      breakTargetKey = null;
+      breakStartTime = 0;
+      breakCooldownUntil = 0;
+      clearBreakVisual();
+      breakRaf = requestAnimationFrame(tickBreaking);
+      return;
+    }
+
+    if (targetKey !== breakTargetKey) {
+      breakTargetKey = targetKey;
+      breakStartTime = now;
+      breakCooldownUntil = 0;
+    }
+
+    const progress = Math.min((now - breakStartTime) / BLOCK_BREAK_DURATION_MS, 1);
+    g.updateBreakProgress(progress);
+    onBreakProgressChange(progress);
+
+    if (progress >= 1) {
+      if (g.breakBlock()) {
+        scheduleAutoSave();
+        onBreakAction();
+      }
+      breakTargetKey = null;
+      breakStartTime = 0;
+      breakCooldownUntil = now + breakCooldownMs;
+      onBreakProgressChange(null);
+      breakRaf = requestAnimationFrame(tickBreaking);
+      return;
+    }
+
+    breakRaf = requestAnimationFrame(tickBreaking);
+  };
+
+  const startBreaking = () => {
+    if (breakRaf !== 0) return;
+    breakTargetKey = null;
+    breakStartTime = 0;
+    breakRaf = requestAnimationFrame(tickBreaking);
+  };
+
   const onKeyDown = (e: KeyboardEvent) => {
     const g = gameRef.current;
     if (!g) return;
@@ -786,23 +847,20 @@ function attachDesktopHandlers(
   const onMouseDown = (e: MouseEvent) => {
     const g = gameRef.current;
     if (!g || !g.locked) return;
-    const target = getTargetBlock(g.camera, g.chunkManager);
-    if (!target?.hit) return;
     if (e.button === 0) {
-      const { x: bx, y: by, z: bz } = target.blockPos;
-      g.chunkManager.setBlock(bx, by, bz, 'air');
-      scheduleAutoSave();
-      onBreakAction();
+      e.preventDefault();
+      startBreaking();
     } else if (e.button === 2) {
-      const px = target.blockPos.x + target.faceNormal.x;
-      const py = target.blockPos.y + target.faceNormal.y;
-      const pz = target.blockPos.z + target.faceNormal.z;
-      if (isPlayerOverlappingBlock(g.playerState, px, py, pz)) return;
-      const blockType = HOTBAR_BLOCKS[g.hotbarIndex];
-      g.chunkManager.setBlock(px, py, pz, blockType);
-      scheduleAutoSave();
-      onPlaceAction();
+      stopBreaking();
+      if (g.placeBlock()) {
+        scheduleAutoSave();
+        onPlaceAction();
+      }
     }
+  };
+
+  const onMouseUp = (e: MouseEvent) => {
+    if (e.button === 0) stopBreaking();
   };
 
   const onWheel = (e: WheelEvent) => {
@@ -821,6 +879,7 @@ function attachDesktopHandlers(
       setIsPaused(false);
     } else {
       setIsPaused(true);
+      stopBreaking();
       onExitRequest();
     }
   };
@@ -834,6 +893,7 @@ function attachDesktopHandlers(
   document.addEventListener('keyup', onKeyUp);
   document.addEventListener('mousemove', onMouseMove);
   document.addEventListener('mousedown', onMouseDown);
+  document.addEventListener('mouseup', onMouseUp);
   document.addEventListener('wheel', onWheel, { passive: true });
   document.addEventListener('pointerlockchange', onPointerLockChange);
   canvas.addEventListener('click', onCanvasClick);
@@ -844,9 +904,11 @@ function attachDesktopHandlers(
     document.removeEventListener('keyup', onKeyUp);
     document.removeEventListener('mousemove', onMouseMove);
     document.removeEventListener('mousedown', onMouseDown);
+    document.removeEventListener('mouseup', onMouseUp);
     document.removeEventListener('wheel', onWheel);
     document.removeEventListener('pointerlockchange', onPointerLockChange);
     canvas.removeEventListener('click', onCanvasClick);
     canvas.removeEventListener('contextmenu', onContextMenu);
+    stopBreaking();
   };
 }
