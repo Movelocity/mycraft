@@ -5,6 +5,7 @@ import { BLOCK_BREAK_DURATION_MS } from '@/lib/minecraft/breakOverlay';
 const TOUCH_SENS = 0.005;
 const TAP_MAX_MS = 300;
 const TAP_MAX_MOVE_PX = 10;
+const RIGHT_TOUCH_START_RATIO = 0.5;
 
 // 必须让准星停留在某个可破坏方块上累计 ARMING_MS 才开始破坏，
 // 避免普通移动视角时把沿途方块误破坏。
@@ -208,7 +209,18 @@ export function useMobileControls({
   // ── Right-half touch events ──────────────────────────────────────────────────
   const onRightTouchStart = useCallback((e: React.TouchEvent) => {
     if (rightTouchRef.current !== null) return;
-    const touch = e.changedTouches[0];
+    const halfWidth = window.innerWidth * RIGHT_TOUCH_START_RATIO;
+    let touch: Touch | null = null;
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      const candidate = e.changedTouches[i];
+      if (candidate.clientX >= halfWidth) {
+        touch = candidate;
+        break;
+      }
+    }
+    if (!touch) return;
+
+    e.preventDefault();
 
     const ref: TouchState = {
       id: touch.identifier,
@@ -243,6 +255,12 @@ export function useMobileControls({
       ref.lastX = touch.clientX;
       ref.lastY = touch.clientY;
 
+      const dx = touch.clientX - ref.startX;
+      const dy = touch.clientY - ref.startY;
+      if (!ref.cancelled && ref.mode !== 'breaking' && Math.sqrt(dx * dx + dy * dy) > TAP_MAX_MOVE_PX) {
+        cancelBreak(ref);
+      }
+
       const state = getPlayerState();
       if (!state) break;
       state.yaw -= movX * TOUCH_SENS;
@@ -250,7 +268,7 @@ export function useMobileControls({
       state.pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, state.pitch));
       break;
     }
-  }, [getPlayerState]);
+  }, [getPlayerState, cancelBreak]);
 
   const onRightTouchEnd = useCallback((e: React.TouchEvent) => {
     const ref = rightTouchRef.current;
@@ -269,7 +287,7 @@ export function useMobileControls({
       const moved = Math.sqrt(dx * dx + dy * dy);
       const duration = Date.now() - ref.startTime;
 
-      if (moved <= TAP_MAX_MOVE_PX && duration < TAP_MAX_MS) {
+      if (!ref.cancelled && moved <= TAP_MAX_MOVE_PX && duration < TAP_MAX_MS) {
         onPlaceBlock();
       }
 

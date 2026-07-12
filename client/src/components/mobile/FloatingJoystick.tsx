@@ -7,6 +7,7 @@ interface Props {
 
 const STICK_RADIUS = 48;
 const KNOB_RADIUS = 20;
+const LEFT_TOUCH_START_RATIO = 0.5;
 
 export default function FloatingJoystick({ onMove, onRelease }: Props) {
   const touchIdRef = useRef<number | null>(null);
@@ -38,7 +39,18 @@ export default function FloatingJoystick({ onMove, onRelease }: Props) {
 
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     if (touchIdRef.current !== null) return;
-    const touch = e.changedTouches[0];
+    const halfWidth = window.innerWidth * LEFT_TOUCH_START_RATIO;
+    let touch: Touch | null = null;
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      const candidate = e.changedTouches[i];
+      if (candidate.clientX < halfWidth) {
+        touch = candidate;
+        break;
+      }
+    }
+    if (!touch) return;
+
+    e.preventDefault();
     touchIdRef.current = touch.identifier;
     originRef.current = { x: touch.clientX, y: touch.clientY };
     showJoystick(touch.clientX, touch.clientY);
@@ -51,6 +63,7 @@ export default function FloatingJoystick({ onMove, onRelease }: Props) {
       const touch = e.changedTouches[i];
       if (touch.identifier !== touchIdRef.current) continue;
 
+      e.preventDefault();
       const dx = touch.clientX - origin.x;
       const dy = touch.clientY - origin.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
@@ -72,6 +85,7 @@ export default function FloatingJoystick({ onMove, onRelease }: Props) {
   const handleTouchEnd = useCallback((e: React.TouchEvent) => {
     for (let i = 0; i < e.changedTouches.length; i++) {
       if (e.changedTouches[i].identifier === touchIdRef.current) {
+        e.preventDefault();
         touchIdRef.current = null;
         originRef.current = null;
         hideJoystick();
