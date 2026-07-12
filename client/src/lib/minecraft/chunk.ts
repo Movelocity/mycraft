@@ -1,6 +1,7 @@
 // Chunk manager for Web Minecraft Demo
 // Manages chunk-based world generation and block access
 
+import * as THREE from 'three';
 import { BlockType } from './blocks';
 
 export const CHUNK_SIZE = 16;
@@ -17,6 +18,7 @@ export interface Chunk {
   z: number;           // 区块坐标 Z
   blocks: Map<string, BlockType>;  // "localX,localY,localZ" → BlockType
   dirty: boolean;      // 是否需要重建网格
+  meshGroup?: THREE.Group; // 当前附加到场景的网格组
 }
 
 // ── 坐标转换 ──
@@ -154,10 +156,14 @@ function shouldPlaceTree(x: number, z: number, seed: number, biome: Biome): bool
 
 // ── 区块生成 ──
 
+type ColumnMeta = { biome: Biome; terrainH: number; nearRiver: boolean };
+
 export function generateChunk(chunkX: number, chunkZ: number, seed: number): Chunk {
   const blocks = new Map<string, BlockType>();
   const [startX, startZ] = chunkToWorld(chunkX, chunkZ);
 
+  // Pre-compute per-column metadata to avoid redundant noise calls
+  const columns: ColumnMeta[] = new Array(CHUNK_SIZE * CHUNK_SIZE);
   for (let localX = 0; localX < CHUNK_SIZE; localX++) {
     for (let localZ = 0; localZ < CHUNK_SIZE; localZ++) {
       const worldX = startX + localX;
@@ -167,7 +173,15 @@ export function generateChunk(chunkX: number, chunkZ: number, seed: number): Chu
       const riverBand = Math.abs(
         octaveNoise(worldX / 80, worldZ / 80, seed + 55555, 3, 0.5) - 0.5,
       );
-      const nearRiver = riverBand < 0.08;
+      columns[localX * CHUNK_SIZE + localZ] = { biome, terrainH, nearRiver: riverBand < 0.08 };
+    }
+  }
+
+  for (let localX = 0; localX < CHUNK_SIZE; localX++) {
+    for (let localZ = 0; localZ < CHUNK_SIZE; localZ++) {
+      const worldX = startX + localX;
+      const worldZ = startZ + localZ;
+      const { biome, terrainH, nearRiver } = columns[localX * CHUNK_SIZE + localZ];
 
       for (let y = 0; y <= terrainH; y++) {
         let blockType: BlockType;
@@ -242,14 +256,80 @@ function placeTree(blocks: Map<string, BlockType>, x: number, y: number, z: numb
   }
 }
 
+// ── ChangesIndex ──
+
+export type BlockChange = [lx: number, ly: number, lz: number, type: BlockType];
+
+export class ChangesIndex {
+  private buckets = new Map<string, BlockChange[]>();
+
+  add(worldX: number, worldY: number, worldZ: number, type: BlockType): void {
+    const [cx, cz] = worldToChunk(worldX, worldZ);
+    const [lx, , lz] = worldToLocal(worldX, worldY, worldZ);
+    const key = chunkKey(cx, cz);
+    let bucket = this.buckets.get(key);
+    if (!bucket) {
+      bucket = [];
+      this.buckets.set(key, bucket);
+    }
+    // Replace existing entry at same local coord if present
+    const idx = bucket.findIndex(c => c[0] === lx && c[1] === worldY && c[2] === lz);
+    if (idx >= 0) {
+      bucket[idx] = [lx, worldY, lz, type];
+    } else {
+      bucket.push([lx, worldY, lz, type]);
+    }
+  }
+
+  getForChunk(chunkX: number, chunkZ: number): BlockChange[] {
+    return this.buckets.get(chunkKey(chunkX, chunkZ)) ?? [];
+  }
+
+  hasChanges(chunkX: number, chunkZ: number): boolean {
+    const bucket = this.buckets.get(chunkKey(chunkX, chunkZ));
+    return bucket !== undefined && bucket.length > 0;
+  }
+
+  applyToChunk(chunk: Chunk): void {
+    const changes = this.getForChunk(chunk.x, chunk.z);
+    for (const [lx, ly, lz, type] of changes) {
+      const key = `${lx},${ly},${lz}`;
+      if (type === 'air') {
+        chunk.blocks.delete(key);
+      } else {
+        chunk.blocks.set(key, type);
+      }
+    }
+  }
+
+  toRecord(): Record<string, [number, number, number, BlockType][]> {
+    const result: Record<string, [number, number, number, BlockType][]> = {};
+    for (const [key, bucket] of this.buckets) {
+      result[key] = bucket;
+    }
+    return result;
+  }
+
+  static fromRecord(record: Record<string, [number, number, number, BlockType][]>): ChangesIndex {
+    const idx = new ChangesIndex();
+    for (const [key, bucket] of Object.entries(record)) {
+      idx.buckets.set(key, bucket);
+    }
+    return idx;
+  }
+}
+
 // ── ChunkManager ──
 
 export class ChunkManager {
   chunks = new Map<string, Chunk>();
+  dirtySet = new Set<string>();
   seed: number;
+  changesIndex: ChangesIndex;
 
-  constructor(seed: number) {
+  constructor(seed: number, changesIndex?: ChangesIndex) {
     this.seed = seed;
+    this.changesIndex = changesIndex ?? new ChangesIndex();
   }
 
   getChunk(chunkX: number, chunkZ: number): Chunk | undefined {
@@ -261,6 +341,7 @@ export class ChunkManager {
     let chunk = this.chunks.get(key);
     if (!chunk) {
       chunk = generateChunk(chunkX, chunkZ, this.seed);
+      this.changesIndex.applyToChunk(chunk);
       this.chunks.set(key, chunk);
     }
     return chunk;
@@ -292,8 +373,9 @@ export class ChunkManager {
       chunk.blocks.set(blockKey(lx, ly, lz), type);
     }
     chunk.dirty = true;
+    this.dirtySet.add(chunkKey(chunkX, chunkZ));
+    this.changesIndex.add(x, y, z, type);
 
-    // Mark adjacent chunks dirty if block is on border
     if (lx === 0) this.markDirty(chunkX - 1, chunkZ);
     if (lx === CHUNK_SIZE - 1) this.markDirty(chunkX + 1, chunkZ);
     if (lz === 0) this.markDirty(chunkX, chunkZ - 1);
@@ -302,7 +384,10 @@ export class ChunkManager {
 
   private markDirty(chunkX: number, chunkZ: number): void {
     const chunk = this.getChunk(chunkX, chunkZ);
-    if (chunk) chunk.dirty = true;
+    if (chunk) {
+      chunk.dirty = true;
+      this.dirtySet.add(chunkKey(chunkX, chunkZ));
+    }
   }
 
   getLoadedChunks(): Chunk[] {
@@ -310,7 +395,19 @@ export class ChunkManager {
   }
 
   getDirtyChunks(): Chunk[] {
-    return this.getLoadedChunks().filter(c => c.dirty);
+    const result: Chunk[] = [];
+    for (const key of this.dirtySet) {
+      const chunk = this.chunks.get(key);
+      if (chunk) result.push(chunk);
+    }
+    return result;
+  }
+
+  clearDirty(chunkX: number, chunkZ: number): void {
+    const key = chunkKey(chunkX, chunkZ);
+    const chunk = this.chunks.get(key);
+    if (chunk) chunk.dirty = false;
+    this.dirtySet.delete(key);
   }
 
   getChunkCount(): number {
@@ -319,10 +416,12 @@ export class ChunkManager {
 
   // ── 区块加载调度 (每帧调用) ──
 
-  update(playerX: number, playerZ: number): { loaded: Chunk[]; unloaded: [number, number][] } {
+  update(playerX: number, playerZ: number): { loaded: Chunk[]; unloaded: [number, number][]; meshShow: Chunk[]; meshHide: [number, number][] } {
     const [playerChunkX, playerChunkZ] = worldToChunk(playerX, playerZ);
     const loaded: Chunk[] = [];
     const unloaded: [number, number][] = [];
+    const meshShow: Chunk[] = [];
+    const meshHide: [number, number][] = [];
 
     // 1. 加载生成距离内的区块
     const toLoad: [number, number, number][] = []; // [chunkX, chunkZ, distSq]
@@ -348,17 +447,28 @@ export class ChunkManager {
       loaded.push(chunk);
     }
 
-    // 2. 卸载超出卸载距离的区块
-    for (const [key, chunk] of Array.from(this.chunks)) {
+    // 2. 卸载超出卸载距离的区块；处理渲染距离切换
+    for (const [key, chunk] of this.chunks) {
       const dx = chunk.x - playerChunkX;
       const dz = chunk.z - playerChunkZ;
       const distSq = dx * dx + dz * dz;
+
       if (distSq > UNLOAD_DISTANCE * UNLOAD_DISTANCE) {
-        this.chunks.delete(key);
+        if (!this.changesIndex.hasChanges(chunk.x, chunk.z)) {
+          this.chunks.delete(key);
+        }
+        this.dirtySet.delete(key);
         unloaded.push([chunk.x, chunk.z]);
+      } else {
+        const inRender = distSq <= RENDER_DISTANCE * RENDER_DISTANCE;
+        if (inRender && !chunk.meshGroup) {
+          meshShow.push(chunk);
+        } else if (!inRender && chunk.meshGroup) {
+          meshHide.push([chunk.x, chunk.z]);
+        }
       }
     }
 
-    return { loaded, unloaded };
+    return { loaded, unloaded, meshShow, meshHide };
   }
 }

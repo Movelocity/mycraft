@@ -1,24 +1,22 @@
-// Save system for Web Minecraft Demo
-// Uses IndexedDB for persistent storage with 3 save slots
-
+import { gzip, ungzip } from 'pako';
 import type { BlockType } from './blocks';
 import type { PlayerState } from './player';
+import { ChangesIndex } from './chunk';
 
 const DB_NAME = 'web-minecraft';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_NAME = 'saves';
 const MAX_SLOTS = 3;
 
 export type BlockChange = [x: number, y: number, z: number, type: BlockType];
 
-export interface SaveData {
-  version: 1;
+export interface SaveDataV2 {
+  version: 2;
   name: string;
   timestamp: number;
   world: {
     seed: number;
-    radius: number;
-    changes: BlockChange[];
+    changesByChunk: Record<string, [lx: number, ly: number, lz: number, type: BlockType][]>;
   };
   player: {
     position: { x: number; y: number; z: number };
@@ -36,72 +34,109 @@ export interface SaveInfo {
   position: { x: number; y: number; z: number };
 }
 
-function openDB(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
+// ── IndexedDB connection singleton ──
+
+let dbPromise: Promise<IDBDatabase> | null = null;
+
+function getDB(): Promise<IDBDatabase> {
+  if (dbPromise) return dbPromise;
+  dbPromise = new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = () => {
-      request.result.createObjectStore(STORE_NAME);
+    request.onupgradeneeded = (e) => {
+      const db = (e.target as IDBOpenDBRequest).result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME);
+      }
     };
     request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+    request.onerror = () => {
+      dbPromise = null;
+      reject(request.error);
+    };
   });
+  return dbPromise;
 }
 
+// ── Compression helpers ──
+
+function compress(data: SaveDataV2): Uint8Array {
+  const json = JSON.stringify(data);
+  return gzip(json);
+}
+
+function decompress(bytes: Uint8Array): SaveDataV2 {
+  const result = ungzip(bytes, { toText: true } as Parameters<typeof ungzip>[1]);
+  const json = typeof result === 'string' ? result : new TextDecoder().decode(result as Uint8Array);
+  return JSON.parse(json) as SaveDataV2;
+}
+
+// ── Public API ──
+
 export async function listSaves(): Promise<SaveInfo[]> {
-  const db = await openDB();
+  const db = await getDB();
   const tx = db.transaction(STORE_NAME, 'readonly');
   const store = tx.objectStore(STORE_NAME);
   const saves: SaveInfo[] = [];
 
   for (let slot = 1; slot <= MAX_SLOTS; slot++) {
-    const data = await new Promise<SaveData | undefined>((resolve, reject) => {
+    const raw = await new Promise<Uint8Array | undefined>((resolve, reject) => {
       const req = store.get(slot);
-      req.onsuccess = () => resolve(req.result as SaveData | undefined);
+      req.onsuccess = () => resolve(req.result as Uint8Array | undefined);
       req.onerror = () => reject(req.error);
     });
-    if (data) {
-      saves.push({
-        slot,
-        name: data.name,
-        timestamp: data.timestamp,
-        position: data.player.position,
-      });
+
+    if (raw) {
+      try {
+        const data = decompress(raw);
+        saves.push({
+          slot,
+          name: data.name,
+          timestamp: data.timestamp,
+          position: data.player.position,
+        });
+      } catch {
+        saves.push({ slot, name: '', timestamp: 0, position: { x: 0, y: 0, z: 0 } });
+      }
     } else {
       saves.push({ slot, name: '', timestamp: 0, position: { x: 0, y: 0, z: 0 } });
     }
   }
 
-  db.close();
   return saves;
 }
 
-export async function saveGame(slot: number, data: SaveData): Promise<void> {
-  const db = await openDB();
+export async function saveGame(slot: number, data: SaveDataV2): Promise<void> {
+  const db = await getDB();
+  const compressed = compress(data);
   const tx = db.transaction(STORE_NAME, 'readwrite');
   const store = tx.objectStore(STORE_NAME);
-  store.put(data, slot);
+  store.put(compressed, slot);
   await new Promise<void>((resolve, reject) => {
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
-  db.close();
 }
 
-export async function loadGame(slot: number): Promise<SaveData | null> {
-  const db = await openDB();
+export async function loadGame(slot: number): Promise<SaveDataV2 | null> {
+  const db = await getDB();
   const tx = db.transaction(STORE_NAME, 'readonly');
   const store = tx.objectStore(STORE_NAME);
-  const data = await new Promise<SaveData | undefined>((resolve, reject) => {
+  const raw = await new Promise<Uint8Array | undefined>((resolve, reject) => {
     const req = store.get(slot);
-    req.onsuccess = () => resolve(req.result as SaveData | undefined);
+    req.onsuccess = () => resolve(req.result as Uint8Array | undefined);
     req.onerror = () => reject(req.error);
   });
-  db.close();
-  return data ?? null;
+
+  if (!raw) return null;
+  try {
+    return decompress(raw);
+  } catch {
+    return null;
+  }
 }
 
 export async function deleteSave(slot: number): Promise<void> {
-  const db = await openDB();
+  const db = await getDB();
   const tx = db.transaction(STORE_NAME, 'readwrite');
   const store = tx.objectStore(STORE_NAME);
   store.delete(slot);
@@ -109,31 +144,28 @@ export async function deleteSave(slot: number): Promise<void> {
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
-  db.close();
 }
 
 export function slotName(slot: number): string {
   return `存档 ${slot}`;
 }
 
-// ── 序列化：游戏状态 → SaveData ──
+// ── Serialization: game state → SaveDataV2 ──
 
 export function extractSaveData(params: {
   slot: number;
   seed: number;
-  radius: number;
-  changes: BlockChange[];
+  changesIndex: ChangesIndex;
   player: PlayerState;
   hotbarIndex: number;
-}): SaveData {
+}): SaveDataV2 {
   return {
-    version: 1,
+    version: 2,
     name: slotName(params.slot),
     timestamp: Date.now(),
     world: {
       seed: params.seed,
-      radius: params.radius,
-      changes: params.changes,
+      changesByChunk: params.changesIndex.toRecord(),
     },
     player: {
       position: {
@@ -149,13 +181,13 @@ export function extractSaveData(params: {
   };
 }
 
-// ── 反序列化：SaveData → 恢复参数 ──
+// ── Deserialization: SaveDataV2 → restore params ──
 
-export function restoreFromSave(data: SaveData) {
+export function restoreFromSave(data: SaveDataV2) {
+  const changesIndex = ChangesIndex.fromRecord(data.world.changesByChunk);
   return {
     seed: data.world.seed,
-    radius: data.world.radius,
-    changes: data.world.changes,
+    changesIndex,
     player: {
       position: data.player.position,
       yaw: data.player.yaw,

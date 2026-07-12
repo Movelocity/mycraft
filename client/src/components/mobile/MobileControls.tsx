@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef, useImperativeHandle, forwardRef } from 'react';
 import FloatingJoystick from './FloatingJoystick';
 import JumpButton from './JumpButton';
 import { useMobileControls } from '@/hooks/useMobileControls';
@@ -28,11 +28,11 @@ interface Props {
 // ── Break ring constants ──────────────────────────────────────────────────────
 const RING_R = 56;
 const RING_SIZE = (RING_R + 6) * 2;
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_R;
 
-interface BreakRing {
-  progress: number;
-  x: number;
-  y: number;
+export interface BreakRingHandle {
+  show(x: number, y: number, progress: number): void;
+  hide(): void;
 }
 
 export default function MobileControls({
@@ -47,15 +47,15 @@ export default function MobileControls({
   onBreakBlock,
   onBreakProgressChange,
 }: Props) {
-  const [breakRing, setBreakRing] = useState<BreakRing | null>(null);
+  const breakRingRef = useRef<BreakRingHandle>(null);
 
   const handleBreakProgress = useCallback((progress: number, x: number, y: number) => {
-    setBreakRing({ progress, x, y });
+    breakRingRef.current?.show(x, y, progress);
     onBreakProgressChange(progress);
   }, [onBreakProgressChange]);
 
   const handleBreakCancel = useCallback(() => {
-    setBreakRing(null);
+    breakRingRef.current?.hide();
     onBreakProgressChange(null);
   }, [onBreakProgressChange]);
 
@@ -105,14 +105,8 @@ export default function MobileControls({
         onTouchCancel={onRightTouchEnd}
       />
 
-      {/* Break progress ring */}
-      {breakRing && (
-        <BreakProgressRing
-          progress={breakRing.progress}
-          x={breakRing.x}
-          y={breakRing.y}
-        />
-      )}
+      {/* Break progress ring — ref-driven, no setState */}
+      <BreakProgressRing ref={breakRingRef} />
 
       {/* Pause button — top right */}
       <button
@@ -154,53 +148,68 @@ export default function MobileControls({
 
 // ── Break Progress Ring ───────────────────────────────────────────────────────
 
-function BreakProgressRing({ progress, x, y }: { progress: number; x: number; y: number }) {
-  const expandR = RING_R * progress;
-  const expandDiam = expandR * 2;
+const BreakProgressRing = forwardRef<BreakRingHandle>((_, ref) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const progressCircleRef = useRef<SVGCircleElement>(null);
+
+  useImperativeHandle(ref, () => ({
+    show(x: number, y: number, progress: number) {
+      const el = containerRef.current;
+      if (el) {
+        el.style.display = 'block';
+        el.style.left = `${x - RING_SIZE / 2}px`;
+        el.style.top = `${y - RING_SIZE * 0.6}px`;
+      }
+      const circle = progressCircleRef.current;
+      if (circle) {
+        const offset = RING_CIRCUMFERENCE * (1 - progress);
+        circle.style.strokeDashoffset = String(offset);
+      }
+    },
+    hide() {
+      const el = containerRef.current;
+      if (el) el.style.display = 'none';
+    },
+  }));
 
   return (
     <div
+      ref={containerRef}
       style={{
+        display: 'none',
         position: 'fixed',
-        left: x - RING_SIZE / 2,
-        top: y - RING_SIZE * 0.6,
         width: RING_SIZE,
         height: RING_SIZE,
         pointerEvents: 'none',
       }}
     >
-      {/* Outer border ring */}
-      <svg
-        width={RING_SIZE}
-        height={RING_SIZE}
-        style={{ position: 'absolute', inset: 0 }}
-      >
+      <svg width={RING_SIZE} height={RING_SIZE}>
         <circle
           cx={RING_SIZE / 2}
           cy={RING_SIZE / 2}
           r={RING_R}
           fill="none"
-          stroke="rgba(255,255,255,0.25)"
-          strokeWidth={3}
+          stroke="rgba(255,255,255,0.2)"
+          strokeWidth={6}
+        />
+        <circle
+          ref={progressCircleRef}
+          cx={RING_SIZE / 2}
+          cy={RING_SIZE / 2}
+          r={RING_R}
+          fill="none"
+          stroke="rgba(255,255,255,0.9)"
+          strokeWidth={6}
+          strokeLinecap="round"
+          strokeDasharray={RING_CIRCUMFERENCE}
+          strokeDashoffset={RING_CIRCUMFERENCE}
+          transform={`rotate(-90 ${RING_SIZE / 2} ${RING_SIZE / 2})`}
         />
       </svg>
-
-      {/* Invert expanding circle — grows from center outward */}
-      <div
-        style={{
-          position: 'absolute',
-          left: RING_SIZE / 2 - expandR,
-          top: RING_SIZE / 2 - expandR,
-          width: expandDiam,
-          height: expandDiam,
-          borderRadius: '50%',
-          backdropFilter: 'invert(1)',
-          WebkitBackdropFilter: 'invert(1)',
-        }}
-      />
     </div>
   );
-}
+});
+BreakProgressRing.displayName = 'BreakProgressRing';
 
 // ── Mobile Hotbar ─────────────────────────────────────────────────────────────
 

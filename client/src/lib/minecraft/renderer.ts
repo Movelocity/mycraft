@@ -3,9 +3,8 @@
 
 import * as THREE from 'three';
 import { BLOCKS, BlockType } from './blocks';
-import { WorldData, getBlock } from './world';
 import { getCachedTexture } from './textures';
-import { Chunk, ChunkManager, CHUNK_SIZE, WORLD_HEIGHT, worldToLocal } from './chunk';
+import { Chunk, ChunkManager, CHUNK_SIZE } from './chunk';
 
 // Face directions: +x, -x, +y, -y, +z, -z
 const FACES = [
@@ -34,11 +33,18 @@ function isOpaque(type: BlockType): boolean {
 let atlasTexture: THREE.CanvasTexture | null = null;
 let atlasMap: Map<string, [number, number, number, number]> = new Map(); // key -> [u0, v0, u1, v1]
 
+let sharedOpaqueMat: THREE.MeshLambertMaterial | null = null;
+let sharedTransparentMat: THREE.MeshLambertMaterial | null = null;
+
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
     atlasTexture?.dispose();
     atlasTexture = null;
     atlasMap.clear();
+    sharedOpaqueMat?.dispose();
+    sharedOpaqueMat = null;
+    sharedTransparentMat?.dispose();
+    sharedTransparentMat = null;
   });
 }
 
@@ -98,104 +104,29 @@ function getFaceUVs(blockType: BlockType, faceNormal: 'top' | 'side' | 'bottom',
   return map.get(key) ?? [0, 0, 1, 1];
 }
 
-export function buildWorldMesh(world: WorldData): THREE.Group {
-  const group = new THREE.Group();
-  const { texture, map } = buildAtlas();
+function getSharedMaterials(texture: THREE.CanvasTexture): { opaque: THREE.MeshLambertMaterial; transparent: THREE.MeshLambertMaterial } {
+  if (!sharedOpaqueMat) {
+    sharedOpaqueMat = new THREE.MeshLambertMaterial({ map: texture, vertexColors: true });
+  }
+  if (!sharedTransparentMat) {
+    sharedTransparentMat = new THREE.MeshLambertMaterial({
+      map: texture, vertexColors: true,
+      transparent: true, opacity: 0.85, depthWrite: false, alphaTest: 0.1, side: THREE.DoubleSide,
+    });
+  }
+  return { opaque: sharedOpaqueMat, transparent: sharedTransparentMat };
+}
 
-  // Separate opaque and transparent geometry
-  const opaquePositions: number[] = [];
-  const opaqueUVs: number[] = [];
-  const opaqueBrightness: number[] = [];
-  const opaqueIndices: number[] = [];
-  let opaqueVC = 0;
-
-  const transPositions: number[] = [];
-  const transUVs: number[] = [];
-  const transBrightness: number[] = [];
-  const transIndices: number[] = [];
-  let transVC = 0;
-
-  for (const [key, blockType] of Array.from(world.entries())) {
-    if (blockType === 'air') continue;
-    const [x, y, z] = key.split(',').map(Number);
-    const def = BLOCKS[blockType as BlockType];
-    const isTransparent = def.transparent || def.liquid;
-
-    for (const face of FACES) {
-      const nx = x + face.dir[0];
-      const ny = y + face.dir[1];
-      const nz = z + face.dir[2];
-      const neighbor = getBlock(world, nx, ny, nz);
-
-      if (isOpaque(neighbor)) continue;
-      if (isTransparent && neighbor === blockType) continue;
-
-      const brightness = FACE_BRIGHTNESS[face.normal] ?? 1.0;
-      const [u0, v0, u1, v1] = getFaceUVs(blockType as BlockType, face.normal, map);
-
-      const positions = isTransparent ? transPositions : opaquePositions;
-      const uvs = isTransparent ? transUVs : opaqueUVs;
-      const bArr = isTransparent ? transBrightness : opaqueBrightness;
-      const indices = isTransparent ? transIndices : opaqueIndices;
-      const vc = isTransparent ? transVC : opaqueVC;
-
-      for (const corner of face.corners) {
-        positions.push(x + corner[0], y + corner[1], z + corner[2]);
-        bArr.push(brightness, brightness, brightness);
-      }
-
-      // UV mapping for quad corners: BL, TL, TR, BR
-      uvs.push(u0, v1,  u0, v0,  u1, v0,  u1, v1);
-
-      indices.push(vc, vc + 1, vc + 2, vc, vc + 2, vc + 3);
-
-      if (isTransparent) transVC += 4;
-      else opaqueVC += 4;
+export function disposeChunkMesh(scene: THREE.Scene, chunkX: number, chunkZ: number): void {
+  const name = `chunk_${chunkX}_${chunkZ}`;
+  const obj = scene.getObjectByName(name);
+  if (!obj) return;
+  obj.traverse((child) => {
+    if (child instanceof THREE.Mesh) {
+      child.geometry.dispose();
     }
-  }
-
-  // Build opaque mesh
-  if (opaquePositions.length > 0) {
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(opaquePositions, 3));
-    geo.setAttribute('uv', new THREE.Float32BufferAttribute(opaqueUVs, 2));
-    geo.setAttribute('color', new THREE.Float32BufferAttribute(opaqueBrightness, 3));
-    geo.setIndex(opaqueIndices);
-    geo.computeVertexNormals();
-
-    const mat = new THREE.MeshLambertMaterial({
-      map: texture,
-      vertexColors: true,
-    });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.name = 'opaque';
-    group.add(mesh);
-  }
-
-  // Build transparent mesh
-  if (transPositions.length > 0) {
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(transPositions, 3));
-    geo.setAttribute('uv', new THREE.Float32BufferAttribute(transUVs, 2));
-    geo.setAttribute('color', new THREE.Float32BufferAttribute(transBrightness, 3));
-    geo.setIndex(transIndices);
-    geo.computeVertexNormals();
-
-    const mat = new THREE.MeshLambertMaterial({
-      map: texture,
-      vertexColors: true,
-      transparent: true,
-      opacity: 0.85,
-      depthWrite: false,
-      alphaTest: 0.1,
-      side: THREE.DoubleSide,
-    });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.name = 'transparent';
-    group.add(mesh);
-  }
-
-  return group;
+  });
+  scene.remove(obj);
 }
 
 // ── 区块级网格构建 ──
@@ -203,6 +134,11 @@ export function buildWorldMesh(world: WorldData): THREE.Group {
 export function buildChunkMesh(chunk: Chunk, manager: ChunkManager): THREE.Group {
   const group = new THREE.Group();
   const { texture, map } = buildAtlas();
+  const { opaque: opaqueMat, transparent: transMat } = getSharedMaterials(texture);
+
+  const blockCount = chunk.blocks.size;
+  const maxFaces = blockCount * 6;
+  const maxVertices = maxFaces * 4;
 
   const opaquePositions: number[] = [];
   const opaqueUVs: number[] = [];
@@ -216,10 +152,14 @@ export function buildChunkMesh(chunk: Chunk, manager: ChunkManager): THREE.Group
   const transIndices: number[] = [];
   let transVC = 0;
 
+  opaquePositions.length = 0;
+  transPositions.length = 0;
+  void maxVertices;
+
   const worldStartX = chunk.x * CHUNK_SIZE;
   const worldStartZ = chunk.z * CHUNK_SIZE;
 
-  for (const [key, blockType] of Array.from(chunk.blocks)) {
+  for (const [key, blockType] of chunk.blocks) {
     if (blockType === 'air') continue;
     const [lx, ly, lz] = key.split(',').map(Number);
     const wx = worldStartX + lx;
@@ -232,7 +172,6 @@ export function buildChunkMesh(chunk: Chunk, manager: ChunkManager): THREE.Group
       const nwy = ly + face.dir[1];
       const nwz = wz + face.dir[2];
 
-      // 使用 ChunkManager 获取邻居方块 (支持跨区块剔除)
       const neighbor = manager.getBlock(nwx, nwy, nwz);
 
       if (isOpaque(neighbor)) continue;
@@ -266,10 +205,8 @@ export function buildChunkMesh(chunk: Chunk, manager: ChunkManager): THREE.Group
     geo.setAttribute('uv', new THREE.Float32BufferAttribute(opaqueUVs, 2));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(opaqueBrightness, 3));
     geo.setIndex(opaqueIndices);
-    geo.computeVertexNormals();
 
-    const mat = new THREE.MeshLambertMaterial({ map: texture, vertexColors: true });
-    const mesh = new THREE.Mesh(geo, mat);
+    const mesh = new THREE.Mesh(geo, opaqueMat);
     mesh.name = 'opaque';
     group.add(mesh);
   }
@@ -280,13 +217,8 @@ export function buildChunkMesh(chunk: Chunk, manager: ChunkManager): THREE.Group
     geo.setAttribute('uv', new THREE.Float32BufferAttribute(transUVs, 2));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(transBrightness, 3));
     geo.setIndex(transIndices);
-    geo.computeVertexNormals();
 
-    const mat = new THREE.MeshLambertMaterial({
-      map: texture, vertexColors: true,
-      transparent: true, opacity: 0.85, depthWrite: false, alphaTest: 0.1, side: THREE.DoubleSide,
-    });
-    const mesh = new THREE.Mesh(geo, mat);
+    const mesh = new THREE.Mesh(geo, transMat);
     mesh.name = 'transparent';
     group.add(mesh);
   }

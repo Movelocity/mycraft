@@ -322,43 +322,72 @@ export function isPlayerOverlappingBlock(
   );
 }
 
-// Raycasting for block targeting
+const _rayDir = new THREE.Vector3();
+const _rayPos = new THREE.Vector3();
+const _rayPrev = new THREE.Vector3();
+
 export function getTargetBlock(
   camera: THREE.PerspectiveCamera,
   manager: ChunkManager,
   maxDistance: number = 6
 ): { hit: boolean; blockPos: THREE.Vector3; faceNormal: THREE.Vector3 } | null {
-  const direction = new THREE.Vector3(0, 0, -1);
-  direction.applyEuler(camera.rotation);
+  _rayDir.set(0, 0, -1).applyEuler(camera.rotation);
+  _rayPos.copy(camera.position);
 
-  const pos = camera.position.clone();
-  const step = 0.05;
+  // 3D DDA voxel traversal
+  const ox = _rayDir.x, oy = _rayDir.y, oz = _rayDir.z;
 
-  let prevPos = pos.clone();
+  let ix = Math.floor(_rayPos.x);
+  let iy = Math.floor(_rayPos.y);
+  let iz = Math.floor(_rayPos.z);
 
-  for (let d = 0; d < maxDistance; d += step) {
-    const bx = Math.floor(pos.x);
-    const by = Math.floor(pos.y);
-    const bz = Math.floor(pos.z);
+  const stepX = ox > 0 ? 1 : -1;
+  const stepY = oy > 0 ? 1 : -1;
+  const stepZ = oz > 0 ? 1 : -1;
 
-    const block = manager.getBlock(bx, by, bz);
+  const tDeltaX = Math.abs(1 / (ox || 1e-10));
+  const tDeltaY = Math.abs(1 / (oy || 1e-10));
+  const tDeltaZ = Math.abs(1 / (oz || 1e-10));
+
+  const fx = _rayPos.x - ix;
+  const fy = _rayPos.y - iy;
+  const fz = _rayPos.z - iz;
+
+  let tMaxX = (ox > 0 ? (1 - fx) : fx) * tDeltaX;
+  let tMaxY = (oy > 0 ? (1 - fy) : fy) * tDeltaY;
+  let tMaxZ = (oz > 0 ? (1 - fz) : fz) * tDeltaZ;
+
+  let prevX = ix, prevY = iy, prevZ = iz;
+  let t = 0;
+
+  while (t < maxDistance) {
+    const block = manager.getBlock(ix, iy, iz);
     if (block !== 'air' && !BLOCKS[block].liquid) {
-      // Compute face normal from previous position
-      const pbx = Math.floor(prevPos.x);
-      const pby = Math.floor(prevPos.y);
-      const pbz = Math.floor(prevPos.z);
-      const normal = new THREE.Vector3(pbx - bx, pby - by, pbz - bz);
-
       return {
         hit: true,
-        blockPos: new THREE.Vector3(bx, by, bz),
-        faceNormal: normal,
+        blockPos: new THREE.Vector3(ix, iy, iz),
+        faceNormal: new THREE.Vector3(prevX - ix, prevY - iy, prevZ - iz),
       };
     }
 
-    prevPos.copy(pos);
-    pos.addScaledVector(direction, step);
+    prevX = ix; prevY = iy; prevZ = iz;
+
+    if (tMaxX < tMaxY && tMaxX < tMaxZ) {
+      t = tMaxX;
+      tMaxX += tDeltaX;
+      ix += stepX;
+    } else if (tMaxY < tMaxZ) {
+      t = tMaxY;
+      tMaxY += tDeltaY;
+      iy += stepY;
+    } else {
+      t = tMaxZ;
+      tMaxZ += tDeltaZ;
+      iz += stepZ;
+    }
   }
 
   return null;
 }
+
+void _rayPrev;

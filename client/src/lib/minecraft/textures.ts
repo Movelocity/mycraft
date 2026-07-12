@@ -206,7 +206,6 @@ if (import.meta.hot) {
 export function getCachedTexture(blockType: BlockType, face: 'top' | 'side' | 'bottom'): HTMLCanvasElement {
   const key = `${blockType}_${face}`;
   if (!textureCache.has(key)) {
-    console.log('Generating texture for', blockType, face);
     textureCache.set(key, generateBlockTexture(blockType, face));
   }
   return textureCache.get(key)!;

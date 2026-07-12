@@ -3,22 +3,15 @@
 // Style: Pixel-perfect Minecraft UI, Press Start 2P font, earthy palette
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
+import DebugOverlay, { type DebugOverlayHandle } from '@/components/DebugOverlay';
 import * as THREE from 'three';
 import { BLOCKS, HOTBAR_BLOCKS, type BlockType } from '@/lib/minecraft/blocks';
-import { ChunkManager, RENDER_DISTANCE } from '@/lib/minecraft/chunk';
+import { ChangesIndex, type ChunkManager } from '@/lib/minecraft/chunk';
+import { GameEngine, type GameLoadData } from '@/lib/minecraft/engine';
 import {
-  buildChunkMesh,
-  createSkybox,
-  createSun,
-  createHighlightBox,
-  createScene,
-} from '@/lib/minecraft/renderer';
-import {
-  createPlayerState,
-  updatePlayer,
-  applyPlayerToCamera,
-  getTargetBlock,
+  type PlayerState,
   isPlayerOverlappingBlock,
+  getTargetBlock,
   InputState,
 } from '@/lib/minecraft/player';
 import MobileControls from '@/components/mobile/MobileControls';
@@ -27,8 +20,8 @@ import { exitFullscreen, isMobileUA } from '@/utils/mobile';
 
 export interface GameInitData {
   seed: number;
-  radius: number;
   changes?: [number, number, number, BlockType][];
+  changesIndex?: ChangesIndex;
   player?: {
     position: { x: number; y: number; z: number };
     yaw: number;
@@ -48,27 +41,12 @@ interface MinecraftGameProps {
 export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: MinecraftGameProps = {}) {
   const isMobile = mobileMode ?? isMobileUA();
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const gameRef = useRef<{
-    scene: THREE.Scene;
-    camera: THREE.PerspectiveCamera;
-    renderer: THREE.WebGLRenderer;
-    chunkManager: ChunkManager;
-    highlight: THREE.LineSegments;
-    animFrame: number;
-    lastTime: number;
-    input: InputState;
-    playerState: ReturnType<typeof createPlayerState>;
-    hotbarIndex: number;
-    locked: boolean;
-    seed: number;
-    radius: number;
-    changes: [number, number, number, BlockType][];
-  } | null>(null);
+  const engineRef = useRef<GameEngine | null>(null);
 
   const [hotbarIndex, setHotbarIndex] = useState(loadData?.hotbarIndex ?? 0);
-  const [debugInfo, setDebugInfo] = useState({ x: 0, y: 0, z: 0, fps: 0, flying: false, targetBlock: 'air', chunks: 0 });
+  const debugRef = useRef<DebugOverlayHandle>(null);
   const [showHelp, setShowHelp] = useState(false);
-  // Desktop: paused when pointer is not locked; Mobile: paused via explicit button
+  const [flying, setFlying] = useState(loadData?.player?.flying ?? false);
   const [isPaused, setIsPaused] = useState(!isMobile);
   const [hearts] = useState(10);
   const [saveNotification, setSaveNotification] = useState<string | null>(null);
@@ -80,7 +58,6 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
   const [breakProgress, setBreakProgress] = useState<number | null>(null);
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const movingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const underwaterRef = useRef(false);
   const isPausedRef = useRef(isPaused);
   const showExitConfirmRef = useRef(showExitConfirm);
   const previousPausedRef = useRef(isPaused);
@@ -92,19 +69,19 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
   showExitConfirmRef.current = showExitConfirm;
 
   const clearInput = useCallback(() => {
-    const g = gameRef.current;
-    if (!g) return;
-    g.input.forward = false;
-    g.input.backward = false;
-    g.input.left = false;
-    g.input.right = false;
-    g.input.jump = false;
-    g.input.sprint = false;
-    g.input.sneak = false;
-    g.input.fly = false;
-    g.input.flyDown = false;
-    g.input.joystickX = null;
-    g.input.joystickY = null;
+    const e = engineRef.current;
+    if (!e) return;
+    e.input.forward = false;
+    e.input.backward = false;
+    e.input.left = false;
+    e.input.right = false;
+    e.input.jump = false;
+    e.input.sprint = false;
+    e.input.sneak = false;
+    e.input.fly = false;
+    e.input.flyDown = false;
+    e.input.joystickX = null;
+    e.input.joystickY = null;
   }, []);
 
   const openExitConfirm = useCallback(() => {
@@ -114,7 +91,7 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
     setShowExitConfirm(true);
     setIsPaused(true);
     clearInput();
-    if (document.pointerLockElement === canvasRef.current) {
+    if (document.pointerLockElement) {
       document.exitPointerLock();
     }
   }, [clearInput]);
@@ -134,39 +111,16 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
     }
   }, [isMobile]);
 
-  const rebuildDirtyChunks = useCallback(() => {
-    const g = gameRef.current;
-    if (!g) return;
-    const dirtyChunks = g.chunkManager.getDirtyChunks();
-    for (const chunk of dirtyChunks) {
-      const chunkName = `chunk_${chunk.x}_${chunk.z}`;
-      const old = g.scene.getObjectByName(chunkName);
-      if (old) {
-        old.traverse((obj) => {
-          if (obj instanceof THREE.Mesh) {
-            obj.geometry.dispose();
-            (obj.material as THREE.Material).dispose();
-          }
-        });
-        g.scene.remove(old);
-      }
-      const newMesh = buildChunkMesh(chunk, g.chunkManager);
-      g.scene.add(newMesh);
-      chunk.dirty = false;
-    }
-  }, []);
-
   const handleSave = useCallback(async () => {
-    const g = gameRef.current;
-    if (!slot || !g) return;
+    const e = engineRef.current;
+    if (!slot || !e) return;
     const { extractSaveData, saveGame } = await import('@/lib/minecraft/save');
     const data = extractSaveData({
       slot,
-      seed: g.seed,
-      radius: g.radius,
-      changes: g.changes,
-      player: g.playerState,
-      hotbarIndex: g.hotbarIndex,
+      seed: e.seed,
+      changesIndex: e.chunkManager.changesIndex,
+      player: e.playerState,
+      hotbarIndex: e.hotbarIndex,
     });
     await saveGame(slot, data);
     setSaveNotification('游戏已保存');
@@ -184,16 +138,15 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
   const scheduleAutoSave = useCallback(() => {
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
     autoSaveTimerRef.current = setTimeout(async () => {
-      const g = gameRef.current;
-      if (!slot || !g) return;
+      const e = engineRef.current;
+      if (!slot || !e) return;
       const { extractSaveData, saveGame } = await import('@/lib/minecraft/save');
       const data = extractSaveData({
         slot,
-        seed: g.seed,
-        radius: g.radius,
-        changes: g.changes,
-        player: g.playerState,
-        hotbarIndex: g.hotbarIndex,
+        seed: e.seed,
+        changesIndex: e.chunkManager.changesIndex,
+        player: e.playerState,
+        hotbarIndex: e.hotbarIndex,
       });
       await saveGame(slot, data);
       setSaveNotification('自动保存中...');
@@ -202,80 +155,43 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
   }, [slot]);
 
   const getBreakTargetKey = useCallback(() => {
-    const g = gameRef.current;
-    if (!g) return null;
-    const target = getTargetBlock(g.camera, g.chunkManager);
-    if (!target?.hit) return null;
-    const { x, y, z } = target.blockPos;
-    return `${x},${y},${z}`;
+    return engineRef.current?.getBreakTargetKey() ?? null;
   }, []);
 
   const initGame = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const { scene, camera, renderer } = createScene(canvas);
-
-    scene.add(createSkybox());
-    createSun(scene);
-
-    const worldSeed = loadData?.seed ?? Math.floor(Math.random() * 99999);
-    const worldRadius = loadData?.radius ?? 30;
-    const chunkManager = new ChunkManager(worldSeed);
-
-    // Apply saved block changes
-    const changes: [number, number, number, BlockType][] = loadData?.changes ? [...loadData.changes] : [];
-    for (const [cx, cy, cz, type] of changes) {
-      chunkManager.setBlock(cx, cy, cz, type);
-    }
-
-    const highlight = createHighlightBox();
-    scene.add(highlight);
-
-    let playerState;
-    if (loadData?.player) {
-      playerState = createPlayerState(
-        loadData.player.position.x,
-        loadData.player.position.y,
-        loadData.player.position.z,
-      );
-      playerState.yaw = loadData.player.yaw;
-      playerState.pitch = loadData.player.pitch;
-      playerState.flying = loadData.player.flying;
-    } else {
-      // 生成出生点区块以找到地面高度
-      chunkManager.getOrGenerateChunk(0, 0);
-      let spawnY = 40;
-      for (let y = 60; y >= 0; y--) {
-        if (chunkManager.getBlock(0, y, 0) !== 'air') {
-          spawnY = y + 2;
-          break;
-        }
-      }
-      playerState = createPlayerState(0.5, spawnY + 1.8, 0.5);
-    }
-
-    const input: InputState = {
-      forward: false, backward: false,
-      left: false, right: false,
-      jump: false, sprint: false, sneak: false,
-      fly: false, flyDown: false,
-      joystickX: null, joystickY: null,
+    const gameLoadData: GameLoadData = {
+      seed: loadData?.seed,
+      changes: loadData?.changes,
+      changesIndex: loadData?.changesIndex,
+      player: loadData?.player,
+      hotbarIndex: loadData?.hotbarIndex,
     };
 
-    gameRef.current = {
-      scene, camera, renderer, chunkManager, highlight,
-      animFrame: 0, lastTime: performance.now(),
-      input, playerState, hotbarIndex: loadData?.hotbarIndex ?? 0,
-      locked: false,
-      seed: worldSeed, radius: worldRadius, changes,
-    };
+    const engine = new GameEngine(canvas, gameLoadData);
+    engineRef.current = engine;
+
+    engine.onUnderwaterChanged(setIsUnderwater);
+    engine.onFlyingChanged(setFlying);
+    engine.onDebugUpdated((snap) => debugRef.current?.update(snap));
 
     // ── Desktop-only input handlers ───────────────────────────────────────────
+    // engineRef.current is a GameEngine which directly exposes input/playerState/hotbarIndex/locked/chunkManager/camera
+    const engineGameRef = engineRef as unknown as React.MutableRefObject<{
+      input: InputState;
+      playerState: typeof engine.playerState;
+      hotbarIndex: number;
+      locked: boolean;
+      chunkManager: typeof engine.chunkManager;
+      camera: typeof engine.camera;
+    } | null>;
+
     const cleanupDesktop = isMobile ? () => {} : attachDesktopHandlers(
       canvas,
-      gameRef,
-      setHotbarIndex,
+      engineGameRef,
+      (i) => { setHotbarIndex(i); if (engineRef.current) engineRef.current.hotbarIndex = i; },
       setShowHelp,
       setIsPaused,
       handleSave,
@@ -283,6 +199,7 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
       () => setPlaceTriggerRef.current(t => t + 1),
       () => setBreakTriggerRef.current(t => t + 1),
       openExitConfirm,
+      debugRef,
     );
 
     // Prevent pinch-to-zoom on macOS trackpad (desktop only)
@@ -297,81 +214,17 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
       document.addEventListener('wheel', preventWheelZoom, { passive: false });
     }
 
-    const onResize = () => {
-      const g = gameRef.current;
-      if (!g) return;
-      // Use window dimensions for accurate viewport size (handles dvh and fullscreen changes)
-      const w = window.innerWidth;
-      const h = window.innerHeight;
-      g.renderer.setSize(w, h);
-      g.camera.aspect = w / h;
-      g.camera.updateProjectionMatrix();
-    };
+    const onResize = () => engineRef.current?.handleResize();
     window.addEventListener('resize', onResize);
     document.addEventListener('fullscreenchange', onResize);
-    // ResizeObserver catches dimension changes from banner dismiss, address bar, etc.
     const resizeObserver = new ResizeObserver(onResize);
     resizeObserver.observe(canvas);
 
-    let fpsCount = 0, fpsTimer = 0, fps = 0;
-
-    const gameLoop = (now: number) => {
-      const g = gameRef.current;
-      if (!g) return;
-      const dt = Math.min((now - g.lastTime) / 1000, 0.05);
-      g.lastTime = now;
-
-      fpsCount++;
-      fpsTimer += dt;
-      if (fpsTimer >= 0.5) {
-        fps = Math.round(fpsCount / fpsTimer);
-        fpsCount = 0; fpsTimer = 0;
-      }
-
-      updatePlayer(g.playerState, g.input, g.chunkManager, dt);
-      applyPlayerToCamera(g.playerState, g.camera);
-
-      const cameraBlock = g.chunkManager.getBlock(
-        Math.floor(g.camera.position.x),
-        Math.floor(g.camera.position.y),
-        Math.floor(g.camera.position.z),
-      );
-      const nextUnderwater = cameraBlock === 'water';
-      if (underwaterRef.current !== nextUnderwater) {
-        underwaterRef.current = nextUnderwater;
-        setIsUnderwater(nextUnderwater);
-      }
-
-      // 更新区块加载/卸载
-      const p = g.playerState.position;
-      g.chunkManager.update(p.x, p.z);
-
-      // 重建脏区块网格
-      rebuildDirtyChunks();
-
-      const target = getTargetBlock(g.camera, g.chunkManager);
-      if (target?.hit) {
-        g.highlight.position.set(target.blockPos.x + 0.5, target.blockPos.y + 0.5, target.blockPos.z + 0.5);
-        g.highlight.visible = true;
-      } else {
-        g.highlight.visible = false;
-      }
-
-      const targetBlockName = target?.hit
-        ? BLOCKS[g.chunkManager.getBlock(target.blockPos.x, target.blockPos.y, target.blockPos.z) as BlockType]?.name || 'unknown'
-        : 'air';
-      setDebugInfo({
-        x: Math.round(p.x * 10) / 10,
-        y: Math.round(p.y * 10) / 10,
-        z: Math.round(p.z * 10) / 10,
-        fps,
-        flying: g.playerState.flying,
-        targetBlock: targetBlockName,
-        chunks: g.chunkManager.getChunkCount(),
-      });
-
-      // Detect player movement for held item bob animation
-      const vel = g.playerState.velocity;
+    // Hook into engine tick for movement detection
+    const origTick = engine.tick.bind(engine);
+    engine.tick = (dt: number) => {
+      origTick(dt);
+      const vel = engine.playerState.velocity;
       const isPlayerMoving = (vel.x * vel.x + vel.z * vel.z) > 0.5;
       if (isPlayerMoving) {
         if (!movingTimerRef.current) setIsMoving(true);
@@ -381,12 +234,9 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
           movingTimerRef.current = null;
         }, 150);
       }
-
-      g.renderer.render(g.scene, g.camera);
-      g.animFrame = requestAnimationFrame(gameLoop);
     };
 
-    gameRef.current.animFrame = requestAnimationFrame(gameLoop);
+    engine.start();
 
     return () => {
       cleanupDesktop();
@@ -400,12 +250,10 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
       document.removeEventListener('fullscreenchange', onResize);
       resizeObserver.disconnect();
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
-      if (gameRef.current) {
-        cancelAnimationFrame(gameRef.current.animFrame);
-        gameRef.current.renderer.dispose();
-      }
+      engine.dispose();
+      engineRef.current = null;
     };
-  }, [rebuildDirtyChunks, loadData, handleSave, scheduleAutoSave, isMobile, openExitConfirm]);
+  }, [loadData, handleSave, scheduleAutoSave, isMobile, openExitConfirm]);
 
   useEffect(() => {
     return initGame();
@@ -460,19 +308,8 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
         </svg>
       </div>
 
-      {/* Debug Info — top left */}
-      <div
-        className="absolute top-2 left-2 pointer-events-none"
-        style={{ color: '#fff', fontSize: '9px', textShadow: '1px 1px 0 #000', lineHeight: '1.9' }}
-      >
-        <div style={{ color: '#FCFC00' }}>Web Minecraft</div>
-        <div>FPS: {debugInfo.fps}</div>
-        <div>XYZ: {debugInfo.x} / {debugInfo.y} / {debugInfo.z}</div>
-        <div>Chunks: {debugInfo.chunks}</div>
-        <div style={{ color: '#88FF88' }}>Block: {debugInfo.targetBlock}</div>
-        {debugInfo.flying && <div style={{ color: '#88DDFF' }}>✈ Flying</div>}
-        <div style={{ color: '#aaa', marginTop: '4px' }}>H = Help</div>
-      </div>
+      {/* Debug overlay — ref-driven, no setState on each frame */}
+      <DebugOverlay ref={debugRef} />
 
       {/* Hearts — top right */}
       <div
@@ -531,41 +368,33 @@ export default function MinecraftGame({ loadData, slot, onExit, mobileMode }: Mi
       {/* Mobile controls overlay */}
       {isMobile && (
         <MobileControls
-          gameRef={gameRef}
+          gameRef={engineRef as unknown as React.MutableRefObject<{
+            input: InputState;
+            playerState: NonNullable<typeof engineRef.current>['playerState'];
+            hotbarIndex: number;
+          } | null>}
           isPaused={isPaused}
-          flying={debugInfo.flying}
+          flying={flying}
           hotbarIndex={hotbarIndex}
           onHotbarChange={(i) => {
             setHotbarIndex(i);
-            if (gameRef.current) gameRef.current.hotbarIndex = i;
+            if (engineRef.current) engineRef.current.hotbarIndex = i;
           }}
           onPause={() => setIsPaused(true)}
           getBreakTargetKey={getBreakTargetKey}
           onBreakProgressChange={setBreakProgress}
           onPlaceBlock={() => {
-            const g = gameRef.current;
-            if (!g) return;
-            const target = getTargetBlock(g.camera, g.chunkManager);
-            if (!target?.hit) return;
-            const px = target.blockPos.x + target.faceNormal.x;
-            const py = target.blockPos.y + target.faceNormal.y;
-            const pz = target.blockPos.z + target.faceNormal.z;
-            if (isPlayerOverlappingBlock(g.playerState, px, py, pz)) return;
-            const blockType = HOTBAR_BLOCKS[g.hotbarIndex];
-            g.chunkManager.setBlock(px, py, pz, blockType);
-            g.changes.push([px, py, pz, blockType]);
-            scheduleAutoSave();
-            setPlaceTrigger(t => t + 1);
+            const e = engineRef.current;
+            if (!e) return;
+            if (e.placeBlock()) {
+              scheduleAutoSave();
+              setPlaceTrigger(t => t + 1);
+            }
           }}
           onBreakBlock={() => {
-            const g = gameRef.current;
-            if (!g) return;
-            const target = getTargetBlock(g.camera, g.chunkManager);
-            if (!target?.hit) return;
-            const { x: bx, y: by, z: bz } = target.blockPos;
-            g.chunkManager.setBlock(bx, by, bz, 'air');
-            g.changes.push([bx, by, bz, 'air']);
-            scheduleAutoSave();
+            const e = engineRef.current;
+            if (!e) return;
+            if (e.breakBlock()) scheduleAutoSave();
           }}
         />
       )}
@@ -881,12 +710,11 @@ function attachDesktopHandlers(
   canvas: HTMLCanvasElement,
   gameRef: React.MutableRefObject<{
     input: InputState;
-    playerState: ReturnType<typeof createPlayerState>;
+    playerState: PlayerState;
     hotbarIndex: number;
     locked: boolean;
     chunkManager: ChunkManager;
     camera: THREE.PerspectiveCamera;
-    changes: [number, number, number, BlockType][];
   } | null>,
   setHotbarIndex: (i: number) => void,
   setShowHelp: (fn: (v: boolean) => boolean) => void,
@@ -896,6 +724,7 @@ function attachDesktopHandlers(
   onPlaceAction: () => void,
   onBreakAction: () => void,
   onExitRequest: () => void,
+  debugOverlayRef: React.RefObject<DebugOverlayHandle | null>,
 ): () => void {
   const onKeyDown = (e: KeyboardEvent) => {
     const g = gameRef.current;
@@ -919,6 +748,14 @@ function attachDesktopHandlers(
       case 'Digit8': g.hotbarIndex = 7; setHotbarIndex(7); break;
       case 'Digit9': g.hotbarIndex = 8; setHotbarIndex(8); break;
       case 'KeyH': setShowHelp(h => !h); break;
+      case 'F3': {
+        const overlay = debugOverlayRef.current;
+        if (overlay) {
+          const next = sessionStorage.getItem('debugVisible') !== 'true';
+          overlay.setVisible(next);
+        }
+        break;
+      }
       case 'F5': e.preventDefault(); handleSave(); break;
     }
   };
@@ -954,7 +791,6 @@ function attachDesktopHandlers(
     if (e.button === 0) {
       const { x: bx, y: by, z: bz } = target.blockPos;
       g.chunkManager.setBlock(bx, by, bz, 'air');
-      g.changes.push([bx, by, bz, 'air']);
       scheduleAutoSave();
       onBreakAction();
     } else if (e.button === 2) {
@@ -964,7 +800,6 @@ function attachDesktopHandlers(
       if (isPlayerOverlappingBlock(g.playerState, px, py, pz)) return;
       const blockType = HOTBAR_BLOCKS[g.hotbarIndex];
       g.chunkManager.setBlock(px, py, pz, blockType);
-      g.changes.push([px, py, pz, blockType]);
       scheduleAutoSave();
       onPlaceAction();
     }

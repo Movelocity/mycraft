@@ -83,7 +83,7 @@ export default function Home() {
       setGameData({ data: restored, slot, mobile });
     } else {
       const seed = Math.floor(Math.random() * 99999);
-      setGameData({ data: { seed, radius: 30 }, slot, mobile });
+      setGameData({ data: { seed }, slot, mobile });
     }
   };
 
