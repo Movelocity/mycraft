@@ -358,7 +358,7 @@ export default function Home() {
             安装应用
           </button>
         )}
-        {pwaInstallState.canShowManualHint && (
+        {/* {pwaInstallState.canShowManualHint && (
           <div style={{
             color: 'rgba(255,255,255,0.62)',
             fontSize: 'clamp(6px, 1.5vw, 7px)',
@@ -368,7 +368,7 @@ export default function Home() {
           }}>
             可通过浏览器菜单添加到主屏幕
           </div>
-        )}
+        )} */}
         {showUpdateActions && (
           <div style={{ display: 'flex', gap: 8, width: '100%' }}>
             <button
@@ -476,30 +476,24 @@ export default function Home() {
       )}
 
       {/* Tips */}
-      <div style={{
-        color: '#fff', fontSize: 'clamp(6px, 1.6vw, 8px)', textShadow: '1px 1px 0 #000',
-        textAlign: 'center', lineHeight: '2.2', padding: '0 16px',
-      }}>
-        {isMobile ? (
-          <>
-            <div>轻触右侧 = 放置方块 · 长按右侧 = 破坏</div>
-            <div>左摇杆移动 · 右滑视角 · 跳跃按钮</div>
-          </>
-        ) : (
-          <>
-            <div>Left Click = Break  ·  Right Click = Place</div>
-            <div>WASD = Move  ·  Space = Jump  ·  F = Fly</div>
-          </>
-        )}
-      </div>
+      { !isMobile && ( 
+        <div 
+          style={{
+          color: '#fff', fontSize: 'clamp(6px, 1.6vw, 8px)', textShadow: '1px 1px 0 #000',
+          textAlign: 'center', lineHeight: '2.2', padding: '0 16px',
+        }}>
+          <div>Left Click = Break  ·  Right Click = Place</div>
+          <div>WASD = Move  ·  Space = Jump  ·  F = Fly</div>
+        </div>
+      )}
 
       {/* Version */}
-      <div style={{
+      {/* <div style={{
         position: 'absolute', bottom: '16px', right: '16px',
         color: 'rgba(255,255,255,0.5)', fontSize: '7px', textShadow: '1px 1px 0 #000',
       }}>
         Web Demo v1.0 · Three.js
-      </div>
+      </div> */}
     </div>
   );
 }
