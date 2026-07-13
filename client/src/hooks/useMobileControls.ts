@@ -278,16 +278,17 @@ export function useMobileControls({
       const touch = e.changedTouches[i];
       if (touch.identifier !== ref.id) continue;
 
-      if (ref.mode !== 'idle') {
-        cancelBreak(ref);
-      }
-
       const dx = touch.clientX - ref.startX;
       const dy = touch.clientY - ref.startY;
       const moved = Math.sqrt(dx * dx + dy * dy);
       const duration = Date.now() - ref.startTime;
+      const isTap = !ref.cancelled && moved <= TAP_MAX_MOVE_PX && duration < TAP_MAX_MS;
 
-      if (!ref.cancelled && moved <= TAP_MAX_MOVE_PX && duration < TAP_MAX_MS) {
+      if (ref.mode !== 'idle') {
+        cancelBreak(ref);
+      }
+
+      if (isTap) {
         onPlaceBlock();
       }
 
