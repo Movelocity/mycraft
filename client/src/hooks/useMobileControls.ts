@@ -284,9 +284,7 @@ export function useMobileControls({
       const duration = Date.now() - ref.startTime;
       const isTap = !ref.cancelled && moved <= TAP_MAX_MOVE_PX && duration < TAP_MAX_MS;
 
-      if (ref.mode !== 'idle') {
-        cancelBreak(ref);
-      }
+      cancelBreak(ref);
 
       if (isTap) {
         onPlaceBlock();
